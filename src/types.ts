@@ -78,12 +78,9 @@ export interface ParsedScreenshotFilename {
 /**
  * Device type mapping to App Store Connect display types
  *
- * iPhone display sizes:
- * - 5.5" - iPhone 6+, 7+, 8+ (APP_IPHONE_55)
- * - 6.1" - iPhone XR, 11, 12, 13, 14 (APP_IPHONE_61)
- * - 6.3" - Alias for 6.1" display type
+ * iPhone display sizes (using only required sizes):
+ * - 6.3" - Maps to 6.1" display type (APP_IPHONE_61)
  * - 6.5" - iPhone XS Max, 11 Pro Max (APP_IPHONE_65)
- * - 6.7" - iPhone 12-14 Pro Max, 14 Plus (APP_IPHONE_67)
  * - 6.9" - iPhone 16 Pro Max (APP_IPHONE_69)
  *
  * iPad display sizes:
@@ -92,12 +89,11 @@ export interface ParsedScreenshotFilename {
  * - 13" - iPad Pro 12.9" 3rd gen (APP_IPAD_PRO_3GEN_129)
  */
 export const DEVICE_TYPE_MAP: Record<string, string> = {
-  'iphone-5.5': 'APP_IPHONE_55',
-  'iphone-6.1': 'APP_IPHONE_61',
-  'iphone-6.3': 'APP_IPHONE_61',  // Alias for 6.1" display
+  // iPhones - only 6.9", 6.5", 6.3"
+  'iphone-6.3': 'APP_IPHONE_61',  // Maps to 6.1" display type
   'iphone-6.5': 'APP_IPHONE_65',
-  'iphone-6.7': 'APP_IPHONE_67',
   'iphone-6.9': 'APP_IPHONE_69',
+  // iPads - all sizes
   'ipad-11': 'APP_IPAD_PRO_3GEN_11',
   'ipad-12.9': 'APP_IPAD_PRO_129',
   'ipad-13': 'APP_IPAD_PRO_3GEN_129',
