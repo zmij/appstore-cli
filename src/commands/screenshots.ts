@@ -7,7 +7,7 @@
 import type { Command } from 'commander';
 import chalk from 'chalk';
 import { createClient } from '../client.js';
-import { LANGUAGE_MAP, DEVICE_TYPE_MAP } from '../types.js';
+import { LANGUAGE_MAP, LOCALE_EXPAND, DEVICE_TYPE_MAP } from '../types.js';
 import type { ParsedScreenshotFilename, ScreenshotUploadMode } from '../types.js';
 
 export function registerScreenshotsCommands(program: Command): void {
@@ -92,8 +92,7 @@ export function registerScreenshotsCommands(program: Command): void {
           'APP_IPHONE_55': '5.5"',
           'APP_IPHONE_61': '6.1"',
           'APP_IPHONE_65': '6.5"',
-          'APP_IPHONE_67': '6.7"',
-          'APP_IPHONE_69': '6.9"',
+          'APP_IPHONE_67': '6.9"',
           'APP_IPAD_PRO_3GEN_11': 'iPad 11"',
           'APP_IPAD_PRO_3GEN_129': 'iPad 12.9"',
           'APP_IPAD_PRO_129': 'iPad 13"',
@@ -231,6 +230,7 @@ export function registerScreenshotsCommands(program: Command): void {
       'replace'
     )
     .option('--dry-run', 'Show what would be uploaded without uploading')
+    .option('--device <device>', 'Upload only for specific device (e.g. iphone-6.9, ipad-13)')
     .option('--key-id <keyId>', 'Use specific auth key')
     .action(async (options) => {
       try {
@@ -350,7 +350,10 @@ export function registerScreenshotsCommands(program: Command): void {
             continue;
           }
 
-          const locale = LANGUAGE_MAP[lang] || lang;
+          // Expand language to potentially multiple store locales
+          const locales = LOCALE_EXPAND[lang] || [LANGUAGE_MAP[lang] || lang];
+
+          for (const locale of locales) {
           const localisation = localisationMap.get(locale);
 
           if (!localisation) {
@@ -358,7 +361,7 @@ export function registerScreenshotsCommands(program: Command): void {
             continue;
           }
 
-          console.log(chalk.bold(`\n${lang} (${locale}):`));
+          console.log(chalk.bold(`\n${lang} → ${locale}:`));
           console.log(`  Found ${screenshots.length} screenshots`);
 
           // Group by device type
@@ -371,6 +374,9 @@ export function registerScreenshotsCommands(program: Command): void {
 
           // Process each device type
           for (const [device, deviceScreenshots] of byDevice) {
+            // Filter by --device if specified
+            if (options.device && device !== options.device) continue;
+
             const displayType = DEVICE_TYPE_MAP[device];
             if (!displayType) {
               console.log(chalk.yellow(`    ${device}: Unknown device type, skipping`));
@@ -441,7 +447,7 @@ export function registerScreenshotsCommands(program: Command): void {
                   // Upload to each operation URL
                   for (const op of reservation.uploadOperations) {
                     const chunk = fileContent.slice(op.offset, op.offset + op.length);
-                    await fetch(op.url, {
+                    const uploadResponse = await fetch(op.url, {
                       method: op.method,
                       headers: op.requestHeaders.reduce(
                         (acc: Record<string, string>, h: { name: string; value: string }) => {
@@ -452,6 +458,11 @@ export function registerScreenshotsCommands(program: Command): void {
                       ),
                       body: chunk,
                     });
+                    if (!uploadResponse.ok) {
+                      throw new Error(
+                        `Upload chunk failed: ${uploadResponse.status} ${uploadResponse.statusText}`
+                      );
+                    }
                   }
 
                   // Commit upload
@@ -468,6 +479,7 @@ export function registerScreenshotsCommands(program: Command): void {
               }
             }
           }
+          } // end locale expansion
         }
 
         // Summary
@@ -633,13 +645,13 @@ export function registerScreenshotsCommands(program: Command): void {
         if (options.all) {
           localesToProcess = localisations;
         } else if (options.lang) {
-          const locale = LANGUAGE_MAP[options.lang] || options.lang;
-          const loc = localisations.find((l) => l.locale === locale);
-          if (!loc) {
-            console.log(chalk.yellow(`No localisation found for ${locale}`));
+          const expandedLocales = LOCALE_EXPAND[options.lang]
+            || [LANGUAGE_MAP[options.lang] || options.lang];
+          localesToProcess = localisations.filter((l) => expandedLocales.includes(l.locale));
+          if (localesToProcess.length === 0) {
+            console.log(chalk.yellow(`No localisation found for ${expandedLocales.join(', ')}`));
             return;
           }
-          localesToProcess = [loc];
         } else {
           console.error(chalk.red('Please specify --all or --lang <language>'));
           process.exit(1);

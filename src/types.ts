@@ -81,7 +81,7 @@ export interface ParsedScreenshotFilename {
  * iPhone display sizes (using only required sizes):
  * - 6.3" - Maps to 6.1" display type (APP_IPHONE_61)
  * - 6.5" - iPhone XS Max, 11 Pro Max (APP_IPHONE_65)
- * - 6.9" - iPhone 16 Pro Max (APP_IPHONE_69)
+ * - 6.9" - iPhone 16 Pro Max (APP_IPHONE_67)
  *
  * iPad display sizes:
  * - 11" - iPad Pro 11" 3rd gen (APP_IPAD_PRO_3GEN_11)
@@ -92,7 +92,7 @@ export const DEVICE_TYPE_MAP: Record<string, string> = {
   // iPhones - only 6.9", 6.5", 6.3"
   'iphone-6.3': 'APP_IPHONE_61',  // Maps to 6.1" display type
   'iphone-6.5': 'APP_IPHONE_65',
-  'iphone-6.9': 'APP_IPHONE_69',
+  'iphone-6.9': 'APP_IPHONE_67',  // Maps to 6.7" display type
   // iPads - all sizes
   'ipad-11': 'APP_IPAD_PRO_3GEN_11',
   'ipad-12.9': 'APP_IPAD_PRO_129',
@@ -114,10 +114,24 @@ export const LANGUAGE_MAP: Record<string, string> = {
   'fi': 'fi',
   'he': 'he',
   'hi': 'hi',
+  'id': 'id',
   'ja': 'ja',
   'ko': 'ko',
+  'pt': 'pt-BR',
+  'pt-BR': 'pt-BR',
+  'pt-PT': 'pt-PT',
   'ru': 'ru',
   'zh': 'zh-Hans',
+};
+
+/**
+ * Languages that expand to multiple store locales for screenshots.
+ * When uploading screenshots, files with these language prefixes
+ * are uploaded to all listed locales.
+ */
+export const LOCALE_EXPAND: Record<string, string[]> = {
+  'es': ['es-ES', 'es-MX'],
+  'pt': ['pt-BR', 'pt-PT'],
 };
 
 /**
@@ -135,8 +149,11 @@ export const LOCALE_TO_SHORT: Record<string, string> = {
   'fi': 'fi',
   'he': 'he',
   'hi': 'hi',
+  'id': 'id',
   'ja': 'ja',
   'ko': 'ko',
+  'pt-BR': 'pt',
+  'pt-PT': 'pt-PT',
   'ru': 'ru',
   'zh-Hans': 'zh',
 };
