@@ -100,6 +100,27 @@ export const DEVICE_TYPE_MAP: Record<string, string> = {
 };
 
 /**
+ * Device type mapping for App Preview videos.
+ * Preview types use different enum values than screenshot display types.
+ */
+export const PREVIEW_DEVICE_TYPE_MAP: Record<string, string> = {
+  'iphone-6.3': 'IPHONE_61',
+  'iphone-6.5': 'IPHONE_65',
+  'iphone-6.9': 'IPHONE_67',
+  'ipad-11': 'IPAD_PRO_3GEN_11',
+  'ipad-12.9': 'IPAD_PRO_129',
+  'ipad-13': 'IPAD_PRO_3GEN_129',
+};
+
+/**
+ * Device group aliases — upload one file to all sizes of a device family.
+ */
+export const PREVIEW_DEVICE_GROUPS: Record<string, string[]> = {
+  'iphone': ['iphone-6.9', 'iphone-6.5', 'iphone-6.3'],
+  'ipad': ['ipad-13', 'ipad-12.9', 'ipad-11'],
+};
+
+/**
  * Language code mapping from our format to App Store Connect locale
  */
 export const LANGUAGE_MAP: Record<string, string> = {
@@ -198,6 +219,21 @@ export interface Screenshot {
     errors?: Array<{ code: string; description: string }>;
   };
 }
+
+export interface Preview {
+  id: string;
+  fileName: string;
+  fileSize: number;
+  sourceFileChecksum: string;
+  videoUrl: string;
+  mimeType: string;
+  assetDeliveryState: {
+    state: string;
+    errors?: Array<{ code: string; description: string }>;
+  };
+}
+
+export type PreviewUploadMode = 'replace' | 'add' | 'skip';
 
 // ============================================================================
 // Command Options

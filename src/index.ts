@@ -12,6 +12,7 @@ import chalk from 'chalk';
 // Import commands
 import { registerListingsCommands } from './commands/listings.js';
 import { registerScreenshotsCommands } from './commands/screenshots.js';
+import { registerPreviewsCommands } from './commands/previews.js';
 import { registerIAPCommands } from './commands/iap.js';
 import { registerPagesCommands } from './commands/custom-pages.js';
 import { registerReadCommands } from './commands/read.js';
@@ -28,6 +29,7 @@ program.option('--key-id <keyId>', 'Use specific auth key from config');
 registerReadCommands(program);
 registerListingsCommands(program);
 registerScreenshotsCommands(program);
+registerPreviewsCommands(program);
 registerIAPCommands(program);
 registerPagesCommands(program);
 

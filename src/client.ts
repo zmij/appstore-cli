@@ -24,6 +24,13 @@ import {
   appCustomProductPagesGetInstance,
   appsInAppPurchasesV2GetToManyRelated,
   appsSubscriptionGroupsGetToManyRelated,
+  appStoreVersionLocalizationsAppPreviewSetsGetToManyRelated,
+  appPreviewSetsAppPreviewsGetToManyRelated,
+  appPreviewSetsCreateInstance,
+  appPreviewsCreateInstance,
+  appPreviewsUpdateInstance,
+  appPreviewsDeleteInstance,
+  appPreviewSetsDeleteInstance,
 } from 'appstore-connect-sdk';
 import type { Client } from 'appstore-connect-sdk';
 import { getAuthContext, type AuthContext } from './auth.js';
@@ -32,6 +39,7 @@ import type {
   AppLocalisation,
   CustomProductPage,
   Screenshot,
+  Preview,
 } from './types.js';
 
 /**
@@ -371,6 +379,147 @@ export class AppStoreClient {
           type: 'appScreenshots',
         })),
       },
+    });
+  }
+
+  // ============================================================================
+  // Previews
+  // ============================================================================
+
+  /**
+   * List preview sets for a localisation
+   */
+  async listPreviewSets(localisationId: string): Promise<any[]> {
+    const response = await appStoreVersionLocalizationsAppPreviewSetsGetToManyRelated({
+      client: this.client,
+      path: { id: localisationId },
+    });
+
+    return response.data?.data || [];
+  }
+
+  /**
+   * List previews in a preview set
+   */
+  async listPreviews(previewSetId: string): Promise<Preview[]> {
+    const response = await appPreviewSetsAppPreviewsGetToManyRelated({
+      client: this.client,
+      path: { id: previewSetId },
+    });
+
+    return (response.data?.data || []).map((p: any) => ({
+      id: p.id,
+      fileName: p.attributes?.fileName || '',
+      fileSize: p.attributes?.fileSize || 0,
+      sourceFileChecksum: p.attributes?.sourceFileChecksum || '',
+      videoUrl: p.attributes?.videoUrl || '',
+      mimeType: p.attributes?.mimeType || '',
+      assetDeliveryState: p.attributes?.assetDeliveryState || { state: 'UNKNOWN' },
+    }));
+  }
+
+  /**
+   * Create a preview set for a preview type
+   */
+  async createPreviewSet(
+    localisationId: string,
+    previewType: string
+  ): Promise<string> {
+    const response = await appPreviewSetsCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'appPreviewSets',
+          attributes: {
+            previewType: previewType as any,
+          },
+          relationships: {
+            appStoreVersionLocalization: {
+              data: {
+                id: localisationId,
+                type: 'appStoreVersionLocalizations',
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return response.data?.data?.id || '';
+  }
+
+  /**
+   * Reserve a preview upload slot
+   */
+  async reservePreview(
+    previewSetId: string,
+    fileName: string,
+    fileSize: number
+  ): Promise<{ id: string; uploadOperations: any[] }> {
+    const response = await appPreviewsCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'appPreviews',
+          attributes: {
+            fileName,
+            fileSize,
+          },
+          relationships: {
+            appPreviewSet: {
+              data: {
+                id: previewSetId,
+                type: 'appPreviewSets',
+              },
+            },
+          },
+        },
+      },
+    });
+
+    return {
+      id: response.data?.data?.id || '',
+      uploadOperations: response.data?.data?.attributes?.uploadOperations || [],
+    };
+  }
+
+  /**
+   * Commit a preview upload
+   */
+  async commitPreview(previewId: string, checksum: string): Promise<void> {
+    await appPreviewsUpdateInstance({
+      client: this.client,
+      path: { id: previewId },
+      body: {
+        data: {
+          id: previewId,
+          type: 'appPreviews',
+          attributes: {
+            uploaded: true,
+            sourceFileChecksum: checksum,
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Delete a preview
+   */
+  async deletePreview(previewId: string): Promise<void> {
+    await appPreviewsDeleteInstance({
+      client: this.client,
+      path: { id: previewId },
+    });
+  }
+
+  /**
+   * Delete an entire preview set
+   */
+  async deletePreviewSet(previewSetId: string): Promise<void> {
+    await appPreviewSetsDeleteInstance({
+      client: this.client,
+      path: { id: previewSetId },
     });
   }
 
