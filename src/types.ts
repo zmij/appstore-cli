@@ -233,6 +233,23 @@ export interface Preview {
   };
 }
 
+export interface Build {
+  id: string;
+  version: string;
+  buildNumber: string;
+  processingState: string;
+  uploadedDate: string;
+  platform: string;
+  minOsVersion?: string;
+}
+
+export interface BetaGroup {
+  id: string;
+  name: string;
+  isInternalGroup: boolean;
+  publicLinkEnabled: boolean;
+}
+
 export type PreviewUploadMode = 'replace' | 'add' | 'skip';
 
 // ============================================================================

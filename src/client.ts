@@ -31,6 +31,14 @@ import {
   appPreviewsUpdateInstance,
   appPreviewsDeleteInstance,
   appPreviewSetsDeleteInstance,
+  buildsGetCollection,
+  betaGroupsGetCollection,
+  betaGroupsBuildsCreateToManyRelationship,
+  betaGroupsBuildsGetToManyRelated,
+  betaBuildLocalizationsCreateInstance,
+  betaBuildLocalizationsUpdateInstance,
+  betaBuildLocalizationsGetCollection,
+  betaAppReviewSubmissionsCreateInstance,
 } from 'appstore-connect-sdk';
 import type { Client } from 'appstore-connect-sdk';
 import { getAuthContext, type AuthContext } from './auth.js';
@@ -40,6 +48,8 @@ import type {
   CustomProductPage,
   Screenshot,
   Preview,
+  Build,
+  BetaGroup,
 } from './types.js';
 
 /**
@@ -610,6 +620,216 @@ export class AppStoreClient {
     });
 
     return response.data?.data;
+  }
+
+  // ============================================================================
+  // Builds
+  // ============================================================================
+
+  /**
+   * List builds for the app
+   */
+  async listBuilds(options?: {
+    limit?: number;
+    version?: string;
+    platform?: string;
+  }): Promise<Build[]> {
+    const query: Record<string, any> = {
+      'filter[app]': [this.appId],
+      'sort': ['-uploadedDate'],
+    };
+
+    if (options?.limit) {
+      query['limit'] = options.limit;
+    }
+
+    if (options?.version) {
+      query['filter[version]'] = [options.version];
+    }
+
+    if (options?.platform) {
+      query['filter[processingState]'] = ['VALID'];
+    }
+
+    const response = await buildsGetCollection({
+      client: this.client,
+      query,
+    });
+
+    return (response.data?.data || []).map((b: any) => ({
+      id: b.id,
+      version: b.attributes?.version || '',
+      buildNumber: b.attributes?.version || '',
+      processingState: b.attributes?.processingState || '',
+      uploadedDate: b.attributes?.uploadedDate || '',
+      platform: b.attributes?.platform || '',
+      minOsVersion: b.attributes?.minOsVersion || undefined,
+    }));
+  }
+
+  // ============================================================================
+  // Beta Groups
+  // ============================================================================
+
+  /**
+   * List all beta tester groups for the app
+   */
+  async listBetaGroups(): Promise<BetaGroup[]> {
+    const response = await betaGroupsGetCollection({
+      client: this.client,
+      query: {
+        'filter[app]': [this.appId],
+      },
+    });
+
+    return (response.data?.data || []).map((g: any) => ({
+      id: g.id,
+      name: g.attributes?.name || '',
+      isInternalGroup: g.attributes?.isInternalGroup || false,
+      publicLinkEnabled: g.attributes?.publicLinkEnabled || false,
+    }));
+  }
+
+  /**
+   * List builds assigned to a beta group
+   */
+  async getBetaGroupBuilds(groupId: string): Promise<Build[]> {
+    const response = await betaGroupsBuildsGetToManyRelated({
+      client: this.client,
+      path: { id: groupId },
+    });
+
+    return (response.data?.data || []).map((b: any) => ({
+      id: b.id,
+      version: b.attributes?.version || '',
+      buildNumber: b.attributes?.version || '',
+      processingState: b.attributes?.processingState || '',
+      uploadedDate: b.attributes?.uploadedDate || '',
+      platform: b.attributes?.platform || '',
+    }));
+  }
+
+  /**
+   * Add a build to a beta tester group (promote)
+   */
+  async addBuildToBetaGroup(groupId: string, buildId: string): Promise<void> {
+    const response = await betaGroupsBuildsCreateToManyRelationship({
+      client: this.client,
+      path: { id: groupId },
+      body: {
+        data: [
+          {
+            id: buildId,
+            type: 'builds',
+          },
+        ],
+      },
+    });
+
+    if (response.error) {
+      const errors = (response.error as any).errors || [];
+      const messages = errors.map((e: any) => e.detail || e.title).join('; ');
+      throw new Error(`API error: ${messages || JSON.stringify(response.error)}`);
+    }
+  }
+
+  /**
+   * Set "What to Test" notes on a build (beta build localisation).
+   * Updates existing localisation if one exists for the locale, otherwise creates new.
+   */
+  async setBetaBuildNotes(buildId: string, locale: string, whatsNew: string): Promise<void> {
+    // Check if a localisation already exists for this build+locale
+    const existing = await betaBuildLocalizationsGetCollection({
+      client: this.client,
+      query: {
+        'filter[build]': [buildId],
+        'filter[locale]': [locale],
+      },
+    });
+
+    const existingLoc = (existing.data?.data || [])[0];
+
+    if (existingLoc) {
+      // Update existing
+      const response = await betaBuildLocalizationsUpdateInstance({
+        client: this.client,
+        path: { id: existingLoc.id },
+        body: {
+          data: {
+            id: existingLoc.id,
+            type: 'betaBuildLocalizations',
+            attributes: {
+              whatsNew,
+            },
+          },
+        },
+      });
+
+      if (response.error) {
+        const errors = (response.error as any).errors || [];
+        const messages = errors.map((e: any) => e.detail || e.title).join('; ');
+        throw new Error(`API error updating beta notes: ${messages || JSON.stringify(response.error)}`);
+      }
+    } else {
+      // Create new
+      const response = await betaBuildLocalizationsCreateInstance({
+        client: this.client,
+        body: {
+          data: {
+            type: 'betaBuildLocalizations',
+            attributes: {
+              locale,
+              whatsNew,
+            },
+            relationships: {
+              build: {
+                data: {
+                  id: buildId,
+                  type: 'builds',
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (response.error) {
+        const errors = (response.error as any).errors || [];
+        const messages = errors.map((e: any) => e.detail || e.title).join('; ');
+        throw new Error(`API error setting beta notes: ${messages || JSON.stringify(response.error)}`);
+      }
+    }
+  }
+
+  /**
+   * Submit a build for beta app review (required for external testers)
+   */
+  async submitForBetaReview(buildId: string): Promise<void> {
+    const response = await betaAppReviewSubmissionsCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'betaAppReviewSubmissions',
+          relationships: {
+            build: {
+              data: {
+                id: buildId,
+                type: 'builds',
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (response.error) {
+      const errors = (response.error as any).errors || [];
+      const messages = errors.map((e: any) => e.detail || e.title).join('; ');
+      // Beta review submission may fail if already submitted — that's OK
+      if (!messages.includes('already exists')) {
+        throw new Error(`API error submitting for beta review: ${messages || JSON.stringify(response.error)}`);
+      }
+    }
   }
 }
 

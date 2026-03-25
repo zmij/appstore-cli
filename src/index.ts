@@ -16,6 +16,7 @@ import { registerPreviewsCommands } from './commands/previews.js';
 import { registerIAPCommands } from './commands/iap.js';
 import { registerPagesCommands } from './commands/custom-pages.js';
 import { registerReadCommands } from './commands/read.js';
+import { registerBuildsCommands } from './commands/builds.js';
 
 program
   .name('appstore')
@@ -32,6 +33,7 @@ registerScreenshotsCommands(program);
 registerPreviewsCommands(program);
 registerIAPCommands(program);
 registerPagesCommands(program);
+registerBuildsCommands(program);
 
 // Auth validation command
 program
