@@ -222,7 +222,9 @@ export function registerPreviewsCommands(program: Command): void {
     .option('--platform <platform>', 'Target platform: ios, macos')
     .option(
       '--mode <mode>',
-      'Upload mode: replace (delete existing), add (keep existing), skip (skip if exists)',
+      'Upload mode: replace (delete only previews with matching filename), ' +
+        'replace-all (delete every existing preview in the locale+device tier), ' +
+        'add (keep existing), skip (skip if exists)',
       'skip'
     )
     .option('--dry-run', 'Show what would be uploaded without uploading')
@@ -235,8 +237,8 @@ export function registerPreviewsCommands(program: Command): void {
 
         const mode = options.mode as PreviewUploadMode;
 
-        if (!['replace', 'add', 'skip'].includes(mode)) {
-          console.error(chalk.red('Invalid mode. Use: replace, add, or skip'));
+        if (!['replace', 'replace-all', 'add', 'skip'].includes(mode)) {
+          console.error(chalk.red('Invalid mode. Use: replace, replace-all, add, or skip'));
           process.exit(1);
         }
 
@@ -327,27 +329,42 @@ export function registerPreviewsCommands(program: Command): void {
 
               if (existingPreviews.length > 0) {
                 if (mode === 'skip') {
-                  console.log(chalk.dim(`  ${deviceKey}: skipped (already has preview)`));
-                  totalSkipped++;
-                  continue;
+                  // Skip only if the SAME filename is already there. Other
+                  // previews in the tier (e.g. preview-2-advanced) shouldn't
+                  // block uploading preview-1-relaxed.
+                  if (existingPreviews.some((p: any) => p.fileName === fileName)) {
+                    console.log(chalk.dim(`  ${deviceKey}: skipped (${fileName} already present)`));
+                    totalSkipped++;
+                    continue;
+                  }
                 }
 
-                if (mode === 'replace') {
-                  for (const preview of existingPreviews) {
-                    if (options.dryRun) {
-                      console.log(`  ${deviceKey}: would delete ${preview.fileName}`);
-                    } else {
-                      try {
-                        await client.deletePreview(preview.id);
-                        console.log(chalk.red(`  ${deviceKey}: deleted ${preview.fileName}`));
-                        totalDeleted++;
-                      } catch (error) {
-                        console.error(
-                          chalk.red(`  ${deviceKey}: failed to delete ${preview.fileName}:`),
-                          error instanceof Error ? error.message : error
-                        );
-                        totalErrors++;
-                      }
+                // `replace` deletes only the entries whose filename matches
+                // the new file's basename. Other previews in the tier are
+                // left intact — the common case for "I re-rendered this
+                // specific preview, swap it in."
+                // `replace-all` keeps the old wholesale behaviour for the
+                // rare "wipe this locale+device clean" case.
+                const previewsToDelete = mode === 'replace'
+                  ? existingPreviews.filter((p: any) => p.fileName === fileName)
+                  : mode === 'replace-all'
+                    ? existingPreviews
+                    : [];
+
+                for (const preview of previewsToDelete) {
+                  if (options.dryRun) {
+                    console.log(`  ${deviceKey}: would delete ${preview.fileName}`);
+                  } else {
+                    try {
+                      await client.deletePreview(preview.id);
+                      console.log(chalk.red(`  ${deviceKey}: deleted ${preview.fileName}`));
+                      totalDeleted++;
+                    } catch (error) {
+                      console.error(
+                        chalk.red(`  ${deviceKey}: failed to delete ${preview.fileName}:`),
+                        error instanceof Error ? error.message : error
+                      );
+                      totalErrors++;
                     }
                   }
                 }

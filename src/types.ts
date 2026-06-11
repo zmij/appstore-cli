@@ -250,7 +250,7 @@ export interface BetaGroup {
   publicLinkEnabled: boolean;
 }
 
-export type PreviewUploadMode = 'replace' | 'add' | 'skip';
+export type PreviewUploadMode = 'replace' | 'replace-all' | 'add' | 'skip';
 
 // ============================================================================
 // Command Options
