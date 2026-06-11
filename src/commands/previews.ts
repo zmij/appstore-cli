@@ -444,14 +444,27 @@ export function registerPreviewsCommands(program: Command): void {
   previewsCmd
     .command('delete')
     .description('Delete previews for a language')
-    .requiredOption('--lang <language>', 'Language code (e.g., en, de)')
+    .option('--lang <language>', 'Language code (e.g., en, de). Required unless --all is set.')
     .option('--device <device>', 'Delete only for specific device type')
     .option('--all', 'Delete for all locales')
     .option('--platform <platform>', 'Target platform: ios, macos')
+    .option(
+      '--filename <name>',
+      'Delete only previews matching this exact filename'
+    )
+    .option(
+      '--filename-prefix <prefix>',
+      'Delete previews whose filename starts with this prefix (e.g. cleanup of an old version)'
+    )
     .option('--dry-run', 'Show what would be deleted without deleting')
     .option('--key-id <keyId>', 'Use specific auth key')
     .action(async (options) => {
       try {
+        if (!options.lang && !options.all) {
+          console.error(chalk.red('Please specify --lang <language> or --all'));
+          process.exit(1);
+        }
+
         const client = createClient(options.keyId);
         const version = await getEditableVersion(client, options);
 
@@ -488,12 +501,36 @@ export function registerPreviewsCommands(program: Command): void {
           targetPreviewTypes = new Set(deviceKeys.map((k) => PREVIEW_DEVICE_TYPE_MAP[k]));
         }
 
+        // Compile filename filter once. `--filename` is an exact match;
+        // `--filename-prefix` is a stem match; if neither is set, every
+        // preview matches (preserves the original "delete everything in
+        // scope" behaviour).
+        const filenameExact: string | null = options.filename || null;
+        const filenamePrefix: string | null = options.filenamePrefix || null;
+        if (filenameExact && filenamePrefix) {
+          console.error(chalk.red(
+            'Use either --filename OR --filename-prefix, not both.'
+          ));
+          process.exit(1);
+        }
+        const matchesFilename = (fileName: string): boolean => {
+          if (filenameExact) return fileName === filenameExact;
+          if (filenamePrefix) return fileName.startsWith(filenamePrefix);
+          return true;
+        };
+
         console.log(`Deleting previews...`);
+        if (filenameExact) {
+          console.log(chalk.dim(`Filter: filename == "${filenameExact}"`));
+        } else if (filenamePrefix) {
+          console.log(chalk.dim(`Filter: filename startsWith "${filenamePrefix}"`));
+        }
         if (options.dryRun) {
           console.log(chalk.yellow('DRY RUN — no changes will be made\n'));
         }
 
         let totalDeleted = 0;
+        let totalSkipped = 0;
 
         for (const loc of localesToProcess) {
           console.log(chalk.bold(`\n${loc.locale}:`));
@@ -511,6 +548,11 @@ export function registerPreviewsCommands(program: Command): void {
             const previews = await client.listPreviews(set.id);
 
             for (const preview of previews) {
+              if (!matchesFilename(preview.fileName)) {
+                console.log(chalk.dim(`    Skipped: ${preview.fileName} (no filename match)`));
+                totalSkipped++;
+                continue;
+              }
               if (options.dryRun) {
                 console.log(`    Would delete: ${preview.fileName}`);
               } else {
@@ -531,6 +573,9 @@ export function registerPreviewsCommands(program: Command): void {
 
         if (!options.dryRun) {
           console.log(`\nTotal deleted: ${totalDeleted}`);
+          if (totalSkipped > 0) {
+            console.log(chalk.dim(`Skipped (no filename match): ${totalSkipped}`));
+          }
         }
       } catch (error) {
         console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
