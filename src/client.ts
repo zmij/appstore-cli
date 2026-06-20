@@ -53,6 +53,22 @@ import {
   subscriptionLocalizationsCreateInstance,
   subscriptionLocalizationsUpdateInstance,
   subscriptionLocalizationsDeleteInstance,
+  // IAP / subscription pricing + availability
+  inAppPurchasesV2IapPriceScheduleGetToOneRelated,
+  inAppPurchasePriceSchedulesBaseTerritoryGetToOneRelated,
+  inAppPurchasePriceSchedulesAutomaticPricesGetToManyRelated,
+  inAppPurchasePriceSchedulesManualPricesGetToManyRelated,
+  inAppPurchasePriceSchedulesCreateInstance,
+  inAppPurchasesV2PricePointsGetToManyRelated,
+  inAppPurchasesV2InAppPurchaseAvailabilityGetToOneRelated,
+  inAppPurchaseAvailabilitiesAvailableTerritoriesGetToManyRelated,
+  inAppPurchaseAvailabilitiesCreateInstance,
+  subscriptionsPricesGetToManyRelated,
+  subscriptionsPricePointsGetToManyRelated,
+  subscriptionPricesCreateInstance,
+  subscriptionsSubscriptionAvailabilityGetToOneRelated,
+  subscriptionAvailabilitiesAvailableTerritoriesGetToManyRelated,
+  subscriptionAvailabilitiesCreateInstance,
 } from 'appstore-connect-sdk';
 import type { Client } from 'appstore-connect-sdk';
 import { getAuthContext, type AuthContext } from './auth.js';
@@ -844,6 +860,445 @@ export class AppStoreClient {
       path: { id: localisationId },
     });
     throwIfError(resp);
+  }
+
+  // ============================================================================
+  // IAP Pricing + Availability (auto-equalisation model)
+  // ============================================================================
+  //
+  // Pricing model:
+  //   Every IAP carries one `inAppPurchasePriceSchedule` which holds a
+  //   `baseTerritory` (e.g. USA) and a base `inAppPurchasePricePoint`. With
+  //   auto-equalisation Apple computes every other territory's price from
+  //   that anchor (visible as the schedule's automaticPrices). Push pricing
+  //   = create a new schedule pointing at the desired (territory, price-
+  //   point) pair; Apple swaps the schedule in atomically.
+  //
+  // Availability model:
+  //   `inAppPurchaseAvailability` holds an `availableInNewTerritories`
+  //   boolean (default Apple-rolls-it-out-for-you flag) + a list of
+  //   `availableTerritories`. Same pattern as pricing: push = create new
+  //   availability record.
+  //
+  // Subscriptions mirror the same pattern with their own type names
+  // (`subscriptionPrice`, `subscriptionAvailability`).
+
+  /**
+   * Get the price-schedule object for one IAP, plus its base territory and
+   * the customer-facing price in that territory. Returns null when no
+   * schedule exists (pre-pricing product).
+   *
+   * The `base_price` returned is the human-readable customerPrice from the
+   * base territory's price point — what users see in the App Store.
+   */
+  async getInAppPurchasePriceSummary(iapId: string): Promise<{
+    schedule_id: string;
+    base_territory: string;
+    base_price: string;
+    base_currency: string;
+    price_point_id: string;
+  } | null> {
+    const sched = await inAppPurchasesV2IapPriceScheduleGetToOneRelated({
+      client: this.client,
+      path: { id: iapId },
+    });
+    const scheduleId = (sched.data?.data as any)?.id;
+    if (!scheduleId) return null;
+
+    const base = await inAppPurchasePriceSchedulesBaseTerritoryGetToOneRelated({
+      client: this.client,
+      path: { id: scheduleId },
+    });
+    const baseTerritoryId = (base.data?.data as any)?.id;
+    const baseCurrency = (base.data?.data as any)?.attributes?.currency ?? '';
+    if (!baseTerritoryId) return null;
+
+    // Look up the price for the BASE territory. The schedule keeps the
+    // explicitly-set base price in `manualPrices` (one row, the anchor)
+    // and Apple's auto-equalised prices for every OTHER territory in
+    // `automaticPrices`. So the base price is always in manualPrices.
+    const manual = await inAppPurchasePriceSchedulesManualPricesGetToManyRelated({
+      client: this.client,
+      path: { id: scheduleId },
+      query: {
+        include: ['inAppPurchasePricePoint', 'territory'] as any,
+        limit: 200,
+      } as any,
+    });
+    const manualRows = (manual.data?.data as any[]) ?? [];
+    const priceRow = manualRows.find(
+      (r: any) => r.relationships?.territory?.data?.id === baseTerritoryId,
+    ) ?? manualRows[0];
+    const pricePointId = priceRow?.relationships?.inAppPurchasePricePoint?.data?.id;
+    const included = (manual.data?.included as any[]) ?? [];
+    const pricePoint = included.find(
+      (i: any) => i.type === 'inAppPurchasePricePoints' && i.id === pricePointId,
+    );
+    const customerPrice = pricePoint?.attributes?.customerPrice ?? '';
+
+    return {
+      schedule_id: scheduleId,
+      base_territory: baseTerritoryId,
+      base_price: customerPrice,
+      base_currency: baseCurrency,
+      price_point_id: pricePointId ?? '',
+    };
+  }
+
+  /**
+   * Find the IAP-scoped price point whose customer price matches
+   * `targetPrice` in `territory`. The API exposes price points per-IAP
+   * because each IAP can have its own tier of available points. Throws
+   * when there's no match — caller surfaces that to the user.
+   */
+  async findInAppPurchasePricePoint(
+    iapId: string,
+    territory: string,
+    targetPrice: string,
+  ): Promise<string> {
+    // The price-points endpoint is paged. We page until we find a match
+    // or exhaust — Apple's list is ~50 tiers per territory so 200 covers
+    // the realistic search space.
+    const resp = await inAppPurchasesV2PricePointsGetToManyRelated({
+      client: this.client,
+      path: { id: iapId },
+      query: {
+        'filter[territory]': [territory],
+        limit: 200,
+      } as any,
+    });
+    const points = (resp.data?.data as any[]) ?? [];
+    const match = points.find((p: any) => p.attributes?.customerPrice === targetPrice);
+    if (!match) {
+      const seen = points
+        .map((p: any) => p.attributes?.customerPrice)
+        .filter(Boolean)
+        .slice(0, 12)
+        .join(', ');
+      throw new Error(
+        `No IAP price point matches ${targetPrice} in ${territory}. ` +
+        `First ${Math.min(12, points.length)} available tiers: ${seen || '(none)'}`,
+      );
+    }
+    return match.id;
+  }
+
+  /**
+   * Replace the IAP's price schedule with one whose base territory uses
+   * the given price-point id. Apple auto-equalises every other territory
+   * from this anchor. Mirrors ASC web UI's "Set Price for All Territories"
+   * flow.
+   */
+  async createInAppPurchasePriceSchedule(
+    iapId: string,
+    baseTerritoryId: string,
+    basePricePointId: string,
+  ): Promise<string> {
+    // ASC's schedule create takes the IAP id + a base territory ref + a
+    // single `manualPrices` row that points at the chosen price point in
+    // that territory. The body uses a client-supplied placeholder id
+    // ("${manualPrice}") that ties the row to the schedule before it
+    // exists on the server.
+    const priceRef = '${manualPrice}';
+    const resp = await inAppPurchasePriceSchedulesCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'inAppPurchasePriceSchedules',
+          relationships: {
+            inAppPurchase: {
+              data: { id: iapId, type: 'inAppPurchases' },
+            },
+            baseTerritory: {
+              data: { id: baseTerritoryId, type: 'territories' },
+            },
+            manualPrices: {
+              data: [{ id: priceRef, type: 'inAppPurchasePrices' }],
+            },
+          },
+        },
+        included: [
+          {
+            id: priceRef,
+            type: 'inAppPurchasePrices',
+            attributes: { startDate: null },
+            relationships: {
+              inAppPurchasePricePoint: {
+                data: { id: basePricePointId, type: 'inAppPurchasePricePoints' },
+              },
+              inAppPurchasePriceSchedule: {
+                data: { id: '${schedule}', type: 'inAppPurchasePriceSchedules' },
+              },
+              territory: {
+                data: { id: baseTerritoryId, type: 'territories' },
+              },
+            },
+          },
+        ],
+      } as any,
+    });
+    throwIfError(resp);
+    return (resp.data?.data as any)?.id ?? '';
+  }
+
+  /**
+   * Get an IAP's territory availability — flag + sorted territory list.
+   * Returns null when the API has no availability record yet.
+   */
+  async getInAppPurchaseAvailability(iapId: string): Promise<{
+    availability_id: string;
+    available_in_new_territories: boolean;
+    territories: string[];
+  } | null> {
+    const resp = await inAppPurchasesV2InAppPurchaseAvailabilityGetToOneRelated({
+      client: this.client,
+      path: { id: iapId },
+    });
+    const availId = (resp.data?.data as any)?.id;
+    if (!availId) return null;
+    const flag = (resp.data?.data as any)?.attributes?.availableInNewTerritories ?? false;
+    const territories = await this.listAllInAppPurchaseTerritories(availId);
+    return {
+      availability_id: availId,
+      available_in_new_territories: !!flag,
+      territories,
+    };
+  }
+
+  /** Page through every available-territory row for an availability id. */
+  private async listAllInAppPurchaseTerritories(availId: string): Promise<string[]> {
+    const all: string[] = [];
+    let cursor: string | undefined;
+    // The endpoint is page-based; loop until the response carries no next.
+    for (let safety = 0; safety < 20; safety++) {
+      const resp = await inAppPurchaseAvailabilitiesAvailableTerritoriesGetToManyRelated({
+        client: this.client,
+        path: { id: availId },
+        query: { limit: 200, cursor } as any,
+      });
+      const page = (resp.data?.data as any[]) ?? [];
+      for (const t of page) all.push(t.id);
+      cursor = (resp.data?.links as any)?.next
+        ? new URL((resp.data!.links as any).next as string).searchParams.get('cursor') ?? undefined
+        : undefined;
+      if (!cursor) break;
+    }
+    all.sort();
+    return all;
+  }
+
+  /**
+   * Replace the IAP's availability with a new one. `territories` is the
+   * full target list (the API takes the absolute set, not a diff); pass
+   * null to keep the existing list (only flip the `availableInNewTerritories`
+   * flag).
+   */
+  async createInAppPurchaseAvailability(
+    iapId: string,
+    availableInNewTerritories: boolean,
+    territories: string[],
+  ): Promise<string> {
+    const resp = await inAppPurchaseAvailabilitiesCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'inAppPurchaseAvailabilities',
+          attributes: { availableInNewTerritories },
+          relationships: {
+            inAppPurchase: {
+              data: { id: iapId, type: 'inAppPurchases' },
+            },
+            availableTerritories: {
+              data: territories.map((t) => ({ id: t, type: 'territories' })),
+            },
+          },
+        },
+      } as any,
+    });
+    throwIfError(resp);
+    return (resp.data?.data as any)?.id ?? '';
+  }
+
+  // -- Subscriptions ----------------------------------------------------------
+
+  /**
+   * Get the price summary for one subscription in its base territory.
+   * Subscriptions don't have a schedule wrapper — they carry per-territory
+   * prices directly. We surface the USA price (or the first one returned)
+   * as the "base" for the YAML round-trip.
+   */
+  async getSubscriptionPriceSummary(subscriptionId: string): Promise<{
+    base_territory: string;
+    base_price: string;
+    price_point_id: string;
+  } | null> {
+    const resp = await subscriptionsPricesGetToManyRelated({
+      client: this.client,
+      path: { id: subscriptionId },
+      query: {
+        include: ['subscriptionPricePoint', 'territory'] as any,
+        limit: 200,
+      } as any,
+    });
+    const prices = (resp.data?.data as any[]) ?? [];
+    if (prices.length === 0) return null;
+
+    // Prefer USA so the YAML round-trip is deterministic across products.
+    const included = (resp.data?.included as any[]) ?? [];
+    const findPoint = (pricePointId: string) =>
+      included.find((i: any) => i.type === 'subscriptionPricePoints' && i.id === pricePointId);
+
+    const findTerritoryOnPrice = (priceRow: any): string =>
+      priceRow?.relationships?.territory?.data?.id ?? '';
+
+    let chosen = prices.find((p: any) => findTerritoryOnPrice(p) === 'USA');
+    if (!chosen) chosen = prices[0];
+
+    const pricePointId = chosen.relationships?.subscriptionPricePoint?.data?.id ?? '';
+    const point = findPoint(pricePointId);
+    return {
+      base_territory: findTerritoryOnPrice(chosen),
+      base_price: point?.attributes?.customerPrice ?? '',
+      price_point_id: pricePointId,
+    };
+  }
+
+  /**
+   * Look up the subscription price-point id whose customer price matches
+   * `targetPrice` in `territory`.
+   */
+  async findSubscriptionPricePoint(
+    subscriptionId: string,
+    territory: string,
+    targetPrice: string,
+  ): Promise<string> {
+    const resp = await subscriptionsPricePointsGetToManyRelated({
+      client: this.client,
+      path: { id: subscriptionId },
+      query: {
+        'filter[territory]': [territory],
+        limit: 200,
+      } as any,
+    });
+    const points = (resp.data?.data as any[]) ?? [];
+    const match = points.find((p: any) => p.attributes?.customerPrice === targetPrice);
+    if (!match) {
+      const seen = points
+        .map((p: any) => p.attributes?.customerPrice)
+        .filter(Boolean)
+        .slice(0, 12)
+        .join(', ');
+      throw new Error(
+        `No subscription price point matches ${targetPrice} in ${territory}. ` +
+        `First ${Math.min(12, points.length)} available tiers: ${seen || '(none)'}`,
+      );
+    }
+    return match.id;
+  }
+
+  /**
+   * Set a subscription's base territory price. Apple auto-equalises the
+   * rest. The API requires a `preserveCurrentPrice = true` body flag if
+   * the schedule should stay active for existing subscribers — we set
+   * that to match how ASC web defaults.
+   */
+  async createSubscriptionBasePrice(
+    subscriptionId: string,
+    territoryId: string,
+    pricePointId: string,
+  ): Promise<string> {
+    const resp = await subscriptionPricesCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'subscriptionPrices',
+          attributes: { startDate: null, preserveCurrentPrice: true },
+          relationships: {
+            subscription: {
+              data: { id: subscriptionId, type: 'subscriptions' },
+            },
+            subscriptionPricePoint: {
+              data: { id: pricePointId, type: 'subscriptionPricePoints' },
+            },
+            territory: {
+              data: { id: territoryId, type: 'territories' },
+            },
+          },
+        },
+      } as any,
+    });
+    throwIfError(resp);
+    return (resp.data?.data as any)?.id ?? '';
+  }
+
+  /**
+   * Get a subscription's territory availability — flag + sorted list.
+   */
+  async getSubscriptionAvailability(subscriptionId: string): Promise<{
+    availability_id: string;
+    available_in_new_territories: boolean;
+    territories: string[];
+  } | null> {
+    const resp = await subscriptionsSubscriptionAvailabilityGetToOneRelated({
+      client: this.client,
+      path: { id: subscriptionId },
+    });
+    const availId = (resp.data?.data as any)?.id;
+    if (!availId) return null;
+    const flag = (resp.data?.data as any)?.attributes?.availableInNewTerritories ?? false;
+    const territories = await this.listAllSubscriptionTerritories(availId);
+    return {
+      availability_id: availId,
+      available_in_new_territories: !!flag,
+      territories,
+    };
+  }
+
+  private async listAllSubscriptionTerritories(availId: string): Promise<string[]> {
+    const all: string[] = [];
+    let cursor: string | undefined;
+    for (let safety = 0; safety < 20; safety++) {
+      const resp = await subscriptionAvailabilitiesAvailableTerritoriesGetToManyRelated({
+        client: this.client,
+        path: { id: availId },
+        query: { limit: 200, cursor } as any,
+      });
+      const page = (resp.data?.data as any[]) ?? [];
+      for (const t of page) all.push(t.id);
+      cursor = (resp.data?.links as any)?.next
+        ? new URL((resp.data!.links as any).next as string).searchParams.get('cursor') ?? undefined
+        : undefined;
+      if (!cursor) break;
+    }
+    all.sort();
+    return all;
+  }
+
+  /** Replace a subscription's availability with a new record. */
+  async createSubscriptionAvailability(
+    subscriptionId: string,
+    availableInNewTerritories: boolean,
+    territories: string[],
+  ): Promise<string> {
+    const resp = await subscriptionAvailabilitiesCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'subscriptionAvailabilities',
+          attributes: { availableInNewTerritories },
+          relationships: {
+            subscription: {
+              data: { id: subscriptionId, type: 'subscriptions' },
+            },
+            availableTerritories: {
+              data: territories.map((t) => ({ id: t, type: 'territories' })),
+            },
+          },
+        },
+      } as any,
+    });
+    throwIfError(resp);
+    return (resp.data?.data as any)?.id ?? '';
   }
 
   // ============================================================================

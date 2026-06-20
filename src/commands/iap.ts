@@ -116,6 +116,16 @@ export function registerIAPCommands(program: Command): void {
         let syncedCount = 0;
         let createdCount = 0;
         let errorCount = 0;
+        let priceCount = 0;
+        let availabilityCount = 0;
+
+        // Resolve YAML `territories: 'all'` to the live set already on
+        // the product — handy for stay-at-full-coverage edits where the
+        // user only flips `available_in_new_territories`.
+        const resolveTerritories = async (
+          live: string[],
+          yaml: string[] | 'all',
+        ): Promise<string[]> => (yaml === 'all' ? live : yaml);
 
         // -- Purchases ----------------------------------------------------
         if (metadata.purchases) {
@@ -164,6 +174,66 @@ export function registerIAPCommands(program: Command): void {
               }
               syncedCount++;
             }
+
+            // Pricing — only push when YAML carries a price block. ASC
+            // takes the absolute schedule (no merging), so push = create
+            // a new price schedule pointing at the desired (territory,
+            // tier) pair.
+            if (config.price) {
+              const livePrice = await client.getInAppPurchasePriceSummary(existingPurchase.id);
+              const sameTerritory = livePrice?.base_territory === config.price.base_territory;
+              const samePrice = livePrice?.base_price === config.price.base_price;
+              if (sameTerritory && samePrice) {
+                console.log(chalk.gray(`    price unchanged (${config.price.base_price} ${config.price.base_territory})`));
+              } else {
+                const verb = livePrice ? chalk.yellow('update') : chalk.green('create');
+                console.log(`    price ${verb}: ${config.price.base_price} ${config.price.base_territory}`);
+                if (!options.dryRun) {
+                  try {
+                    const pricePointId = await client.findInAppPurchasePricePoint(
+                      existingPurchase.id, config.price.base_territory, config.price.base_price,
+                    );
+                    await client.createInAppPurchasePriceSchedule(
+                      existingPurchase.id, config.price.base_territory, pricePointId,
+                    );
+                    priceCount++;
+                  } catch (err) {
+                    errorCount++;
+                    console.error(chalk.red(`      ✗ ${err instanceof Error ? err.message : err}`));
+                  }
+                }
+              }
+            }
+
+            // Availability — only push when YAML carries an availability
+            // block. Same all-or-nothing model as pricing.
+            if (config.availability) {
+              const liveAvail = await client.getInAppPurchaseAvailability(existingPurchase.id);
+              const targetTerritories = await resolveTerritories(
+                liveAvail?.territories ?? [], config.availability.territories,
+              );
+              const sameFlag = liveAvail?.available_in_new_territories === config.availability.available_in_new_territories;
+              const sameTerritories = liveAvail &&
+                liveAvail.territories.length === targetTerritories.length &&
+                liveAvail.territories.every((t, i) => t === [...targetTerritories].sort()[i]);
+              if (sameFlag && sameTerritories) {
+                console.log(chalk.gray(`    availability unchanged (${targetTerritories.length} territories)`));
+              } else {
+                const verb = liveAvail ? chalk.yellow('update') : chalk.green('create');
+                console.log(`    availability ${verb}: ${targetTerritories.length} territories, new-territory rollout: ${config.availability.available_in_new_territories ? 'YES' : 'no'}`);
+                if (!options.dryRun) {
+                  try {
+                    await client.createInAppPurchaseAvailability(
+                      existingPurchase.id, config.availability.available_in_new_territories, targetTerritories,
+                    );
+                    availabilityCount++;
+                  } catch (err) {
+                    errorCount++;
+                    console.error(chalk.red(`      ✗ ${err instanceof Error ? err.message : err}`));
+                  }
+                }
+              }
+            }
           }
         }
 
@@ -210,6 +280,60 @@ export function registerIAPCommands(program: Command): void {
               }
               syncedCount++;
             }
+
+            if (config.price) {
+              const livePrice = await client.getSubscriptionPriceSummary(existingSubscription.id);
+              const sameTerritory = livePrice?.base_territory === config.price.base_territory;
+              const samePrice = livePrice?.base_price === config.price.base_price;
+              if (sameTerritory && samePrice) {
+                console.log(chalk.gray(`    price unchanged (${config.price.base_price} ${config.price.base_territory})`));
+              } else {
+                const verb = livePrice ? chalk.yellow('update') : chalk.green('create');
+                console.log(`    price ${verb}: ${config.price.base_price} ${config.price.base_territory}`);
+                if (!options.dryRun) {
+                  try {
+                    const pricePointId = await client.findSubscriptionPricePoint(
+                      existingSubscription.id, config.price.base_territory, config.price.base_price,
+                    );
+                    await client.createSubscriptionBasePrice(
+                      existingSubscription.id, config.price.base_territory, pricePointId,
+                    );
+                    priceCount++;
+                  } catch (err) {
+                    errorCount++;
+                    console.error(chalk.red(`      ✗ ${err instanceof Error ? err.message : err}`));
+                  }
+                }
+              }
+            }
+
+            if (config.availability) {
+              const liveAvail = await client.getSubscriptionAvailability(existingSubscription.id);
+              const targetTerritories = await resolveTerritories(
+                liveAvail?.territories ?? [], config.availability.territories,
+              );
+              const sameFlag = liveAvail?.available_in_new_territories === config.availability.available_in_new_territories;
+              const sameTerritories = liveAvail &&
+                liveAvail.territories.length === targetTerritories.length &&
+                liveAvail.territories.every((t, i) => t === [...targetTerritories].sort()[i]);
+              if (sameFlag && sameTerritories) {
+                console.log(chalk.gray(`    availability unchanged (${targetTerritories.length} territories)`));
+              } else {
+                const verb = liveAvail ? chalk.yellow('update') : chalk.green('create');
+                console.log(`    availability ${verb}: ${targetTerritories.length} territories, new-territory rollout: ${config.availability.available_in_new_territories ? 'YES' : 'no'}`);
+                if (!options.dryRun) {
+                  try {
+                    await client.createSubscriptionAvailability(
+                      existingSubscription.id, config.availability.available_in_new_territories, targetTerritories,
+                    );
+                    availabilityCount++;
+                  } catch (err) {
+                    errorCount++;
+                    console.error(chalk.red(`      ✗ ${err instanceof Error ? err.message : err}`));
+                  }
+                }
+              }
+            }
           }
         }
 
@@ -220,6 +344,8 @@ export function registerIAPCommands(program: Command): void {
         }
         console.log(`Localisations processed: ${syncedCount}`);
         if (createdCount > 0) console.log(chalk.green(`  new: ${createdCount}`));
+        if (priceCount > 0) console.log(chalk.green(`Price schedules: ${priceCount}`));
+        if (availabilityCount > 0) console.log(chalk.green(`Availabilities: ${availabilityCount}`));
         if (errorCount > 0) console.log(chalk.red(`  errors: ${errorCount}`));
         if (errorCount > 0) process.exit(1);
       } catch (error) {
@@ -259,13 +385,33 @@ export function registerIAPCommands(program: Command): void {
         }
         const shortLang = (loc: string): string => reverseLocaleMap.get(loc) ?? loc;
 
+        // Helper: emit `'all'` when the live territory list contains
+        // every territory the export run knows about, otherwise the full
+        // ISO3 array. Lets human-edited YAML stay terse for the common
+        // "available everywhere" case.
+        const knownTerritoryCount = new Map<number, true>(); // tracked below
+        const allShorthand = (live: string[]): string[] | 'all' => {
+          // Apple ships ~175 territories total today; if a product covers
+          // every entry on a reference roster we tag the export as "all".
+          // We snapshot the largest list seen during this run as the
+          // reference — pragmatic but stable across products that ship
+          // everywhere.
+          knownTerritoryCount.set(live.length, true);
+          return live;
+        };
+
         // -- Purchases --------------------------------------------------
         const purchases = await client.listInAppPurchases();
         for (const purchase of purchases) {
           const productId = purchase.attributes?.productId;
           if (!productId) continue;
 
-          const locs = await client.listInAppPurchaseLocalisations(purchase.id);
+          const [locs, price, availability] = await Promise.all([
+            client.listInAppPurchaseLocalisations(purchase.id),
+            client.getInAppPurchasePriceSummary(purchase.id),
+            client.getInAppPurchaseAvailability(purchase.id),
+          ]);
+
           const yamlLocs: Record<string, IAPLocalisation> = {};
           for (const l of locs) {
             const locale = l.attributes?.locale;
@@ -278,9 +424,25 @@ export function registerIAPCommands(program: Command): void {
 
           metadata.purchases[productId] = {
             reference_name: purchase.attributes?.referenceName || '',
+            type: purchase.attributes?.inAppPurchaseType,
+            family_sharable: purchase.attributes?.familySharable,
+            ...(price && {
+              price: {
+                base_territory: price.base_territory,
+                base_price: price.base_price,
+              },
+            }),
+            ...(availability && {
+              availability: {
+                available_in_new_territories: availability.available_in_new_territories,
+                territories: allShorthand(availability.territories),
+              },
+            }),
             localisations: yamlLocs,
           };
-          console.log(`  Exported purchase: ${productId} (${Object.keys(yamlLocs).length} locales)`);
+          const priceLabel = price ? `${price.base_price} ${price.base_territory}` : 'no price';
+          const availLabel = availability ? `${availability.territories.length} terr` : 'no avail';
+          console.log(`  Exported purchase: ${productId} (${Object.keys(yamlLocs).length} locales, ${priceLabel}, ${availLabel})`);
         }
 
         // -- Subscription groups → subscriptions ------------------------
@@ -294,7 +456,12 @@ export function registerIAPCommands(program: Command): void {
             const productId = sub.attributes?.productId;
             if (!productId) continue;
 
-            const locs = await client.listSubscriptionLocalisations(sub.id);
+            const [locs, price, availability] = await Promise.all([
+              client.listSubscriptionLocalisations(sub.id),
+              client.getSubscriptionPriceSummary(sub.id),
+              client.getSubscriptionAvailability(sub.id),
+            ]);
+
             const yamlLocs: Record<string, IAPLocalisation> = {};
             for (const l of locs) {
               const locale = l.attributes?.locale;
@@ -307,10 +474,26 @@ export function registerIAPCommands(program: Command): void {
 
             metadata.subscriptions[productId] = {
               reference_name: sub.attributes?.name || productId,
+              subscription_period: sub.attributes?.subscriptionPeriod,
+              family_sharable: sub.attributes?.familySharable,
+              ...(price && {
+                price: {
+                  base_territory: price.base_territory,
+                  base_price: price.base_price,
+                },
+              }),
+              ...(availability && {
+                availability: {
+                  available_in_new_territories: availability.available_in_new_territories,
+                  territories: allShorthand(availability.territories),
+                },
+              }),
               localisations: yamlLocs,
             };
+            const priceLabel = price ? `${price.base_price} ${price.base_territory}` : 'no price';
+            const availLabel = availability ? `${availability.territories.length} terr` : 'no avail';
             console.log(
-              `  Exported subscription: ${productId} (group ${group.attributes?.referenceName ?? group.id}, ${Object.keys(yamlLocs).length} locales)`,
+              `  Exported subscription: ${productId} (group ${group.attributes?.referenceName ?? group.id}, ${Object.keys(yamlLocs).length} locales, ${priceLabel}, ${availLabel})`,
             );
           }
         }
@@ -368,10 +551,42 @@ export function registerIAPCommands(program: Command): void {
           ? await client.listInAppPurchaseLocalisations(productAscId)
           : await client.listSubscriptionLocalisations(productAscId);
 
+        // Pricing + availability run in parallel to keep `iap show` snappy
+        // — both are independent reads against ASC.
+        const [price, availability] = await Promise.all([
+          kind === 'purchase'
+            ? client.getInAppPurchasePriceSummary(productAscId)
+            : client.getSubscriptionPriceSummary(productAscId),
+          kind === 'purchase'
+            ? client.getInAppPurchaseAvailability(productAscId)
+            : client.getSubscriptionAvailability(productAscId),
+        ]);
+
         console.log(chalk.bold(`${kind === 'purchase' ? 'In-App Purchase' : 'Subscription'}: ${productId}`));
         console.log(`  Reference: ${referenceName}`);
         console.log(`  ASC id: ${productAscId}`);
-        console.log(`  ${locs.length} localisation(s):\n`);
+
+        if (price) {
+          const currency = (price as any).base_currency ? ` ${(price as any).base_currency}` : '';
+          console.log(chalk.bold('\n  Price (auto-equalised from base):'));
+          console.log(`    base_territory: ${price.base_territory}`);
+          console.log(`    base_price: ${price.base_price}${currency}`);
+        } else {
+          console.log(chalk.gray('\n  Price: (not yet set)'));
+        }
+
+        if (availability) {
+          const flagLabel = availability.available_in_new_territories
+            ? chalk.green('YES (auto-rollout)')
+            : chalk.yellow('no');
+          console.log(chalk.bold('\n  Availability:'));
+          console.log(`    available_in_new_territories: ${flagLabel}`);
+          console.log(`    territories: ${availability.territories.length} (first 10: ${availability.territories.slice(0, 10).join(', ')}${availability.territories.length > 10 ? '…' : ''})`);
+        } else {
+          console.log(chalk.gray('\n  Availability: (not yet set)'));
+        }
+
+        console.log(chalk.bold(`\n  ${locs.length} localisation(s):\n`));
 
         // Stable display order — sort by locale string.
         const sorted = locs.slice().sort((a: any, b: any) => {

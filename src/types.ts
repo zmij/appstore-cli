@@ -40,13 +40,49 @@ export interface IAPLocalisation {
   description: string;
 }
 
+/**
+ * Auto-equalised pricing. `base_territory` is an ISO3 code (e.g. "USA");
+ * `base_price` is the customer-facing customer price in that territory's
+ * currency (e.g. "4.99"). Apple computes every other territory's price
+ * from the anchor.
+ */
+export interface IAPPrice {
+  base_territory: string;
+  base_price: string;
+}
+
+/**
+ * Territory availability. `available_in_new_territories` is the auto-
+ * rollout flag (true = whenever Apple opens a new market, the product is
+ * available there by default). `territories` is the explicit list of ISO3
+ * territory codes — or the literal string "all" as shorthand for "every
+ * territory Apple supports today".
+ */
+export interface IAPAvailability {
+  available_in_new_territories: boolean;
+  territories: string[] | 'all';
+}
+
 export interface InAppPurchase {
   reference_name: string;
+  /** Optional `type` + `family_sharable` are immutable on existing IAPs;
+   *  the export emits them for round-trip clarity and Phase 5 `iap create`
+   *  will require them. */
+  type?: 'NON_CONSUMABLE' | 'CONSUMABLE' | 'NON_RENEWING_SUBSCRIPTION';
+  family_sharable?: boolean;
+  price?: IAPPrice;
+  availability?: IAPAvailability;
   localisations: Record<string, IAPLocalisation>;
 }
 
 export interface Subscription {
   reference_name: string;
+  /** Subscription duration (e.g. "ONE_MONTH"). Immutable on existing
+   *  subscriptions; emitted by export for round-trip clarity. */
+  subscription_period?: string;
+  family_sharable?: boolean;
+  price?: IAPPrice;
+  availability?: IAPAvailability;
   localisations: Record<string, IAPLocalisation>;
 }
 
