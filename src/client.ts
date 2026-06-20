@@ -1576,6 +1576,55 @@ export class AppStoreClient {
   }
 
   /**
+   * Re-broadcast a subscription's existing price in a territory WITH
+   * `preserveCurrentPrice = false` — Apple's signal that existing
+   * subscribers in this territory should be migrated to the new
+   * schedule. Same shape as createSubscriptionBasePrice except for
+   * the migration flag.
+   *
+   * Per-territory by design (Apple subscriptionPrices is keyed by
+   * territory). Apple's auto-equalised tier system means the anchor
+   * (USA) is what `iap sync` writes — migrating USA only affects USA
+   * existing subscribers. Other territories have independent
+   * schedules; if you've never explicitly set them, Apple's
+   * derived-price machinery handles new buyers, and existing buyers
+   * on those territories stay on whatever schedule they were signed
+   * up under.
+   *
+   * Price-increase migrations go through Apple's standard customer
+   * notification + consent flow; decreases auto-apply at next
+   * billing. Apple picks the right policy based on the price delta.
+   */
+  async migrateSubscriptionBasePrice(
+    subscriptionId: string,
+    territoryId: string,
+    pricePointId: string,
+  ): Promise<string> {
+    const resp = await subscriptionPricesCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'subscriptionPrices',
+          attributes: { startDate: null, preserveCurrentPrice: false },
+          relationships: {
+            subscription: {
+              data: { id: subscriptionId, type: 'subscriptions' },
+            },
+            subscriptionPricePoint: {
+              data: { id: pricePointId, type: 'subscriptionPricePoints' },
+            },
+            territory: {
+              data: { id: territoryId, type: 'territories' },
+            },
+          },
+        },
+      } as any,
+    });
+    throwIfError(resp);
+    return (resp.data?.data as any)?.id ?? '';
+  }
+
+  /**
    * Get a subscription's territory availability — flag + sorted list.
    */
   async getSubscriptionAvailability(subscriptionId: string): Promise<{

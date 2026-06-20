@@ -914,6 +914,118 @@ export function registerIAPCommands(program: Command): void {
         process.exit(1);
       }
     });
+
+  // ---- migrate-prices ---------------------------------------------------
+  //
+  // Apple parity with `playstore iap migrate-prices`. The mechanics
+  // are quite different:
+  //
+  //   * Apple: subscriptionPrices are per-territory; each carries a
+  //     `preserveCurrentPrice` flag. `iap sync` writes the anchor
+  //     (USA) price with `preserveCurrentPrice = true` so new
+  //     subscribers see the new price but existing cohorts keep
+  //     theirs. This command re-broadcasts the SAME price point with
+  //     `preserveCurrentPrice = false`, the Apple signal to migrate
+  //     existing subscribers in that territory.
+  //
+  //   * Per-territory: the migration only affects the subscription's
+  //     anchor territory by default (USA, matching the YAML's
+  //     base_territory). Apple's auto-equalised tier system means
+  //     other territories have independent schedules — they're NOT
+  //     migrated by the anchor call. The CLI scope is deliberately
+  //     anchor-only; if you want to migrate non-anchor territories
+  //     too, run the command per territory.
+  //
+  //   * Apple picks the customer-facing policy from the price delta:
+  //     decreases auto-apply at next billing; increases trigger
+  //     Apple's standard customer notification + consent flow.
+  //
+  // Single-purpose by design (matches `playstore iap migrate-prices`)
+  // — scope is ONE subscription per invocation. No --product-id=all
+  // because price migrations have user impact and the operator
+  // should be picking each plan deliberately.
+  //
+  // The command DOES NOT fire without `--confirm`. Dry-run is the
+  // default to avoid accidental migrations from a typo.
+
+  iapCmd
+    .command('migrate-prices')
+    .description('Migrate existing subscribers on a subscription to its current price (Apple anchor-territory)')
+    .requiredOption('--product-id <productId>', 'Subscription product ID')
+    .option('--territory <iso3>', 'ISO-3 territory to migrate (defaults to the subscription\'s anchor — usually USA)')
+    .option('--confirm', 'Actually fire the call (required; defaults to dry-run)')
+    .option('--key-id <keyId>', 'Use specific auth key')
+    .action(async (options) => {
+      try {
+        const client = createClient(options.keyId);
+        const productId = options.productId as string;
+
+        // Subscriptions are scoped per group on ASC. Walk groups to
+        // find the one with our productId.
+        const groups = await client.listSubscriptions();
+        let foundSubId: string | undefined;
+        let foundGroupId: string | undefined;
+        for (const g of groups) {
+          const subs = await client.listSubscriptionsInGroup(g.id);
+          const match = subs.find((s: any) => s.attributes?.productId === productId);
+          if (match) {
+            foundSubId = match.id;
+            foundGroupId = g.id;
+            break;
+          }
+        }
+        if (!foundSubId) {
+          console.error(chalk.red(`Subscription not found on ASC: ${productId}`));
+          process.exit(1);
+        }
+
+        // Pull the current "active for new" price summary. This is
+        // the price we'll re-broadcast with preserveCurrentPrice=false.
+        const priceSummary = await client.getSubscriptionPriceSummary(foundSubId);
+        if (!priceSummary || !priceSummary.price_point_id) {
+          console.error(chalk.red(`${productId} has no current price configured on ASC.`));
+          process.exit(1);
+        }
+
+        // Default the territory to the subscription's anchor.
+        const territoryId = (options.territory as string | undefined) ?? priceSummary.base_territory;
+        if (!territoryId) {
+          console.error(chalk.red('Could not resolve a territory — pass --territory <ISO3>.'));
+          process.exit(1);
+        }
+
+        // If the caller asked for a non-anchor territory, the price
+        // point id from the summary won't match — that's the anchor's
+        // point id. We'd need to look up the territory-specific point.
+        // For Phase 1 of migrate-prices, refuse non-anchor scopes with
+        // a clear error rather than silently using the wrong point.
+        if (territoryId !== priceSummary.base_territory) {
+          console.error(chalk.red(`Non-anchor territory migration not supported yet — anchor is ${priceSummary.base_territory}, you asked for ${territoryId}.`));
+          console.error(chalk.gray('Run without --territory to migrate the anchor, or open a follow-up issue for per-territory support.'));
+          process.exit(1);
+        }
+
+        console.log(chalk.bold(`\nMigration plan:`));
+        console.log(`  subscription:   ${chalk.cyan(productId)} (ASC id ${foundSubId})`);
+        console.log(`  group:          ${foundGroupId}`);
+        console.log(`  anchor:         ${territoryId}`);
+        console.log(`  target price:   ${priceSummary.base_price} ${territoryId} (point id ${priceSummary.price_point_id})`);
+        console.log(chalk.gray(`  semantics:      re-broadcasts the current price with preserveCurrentPrice=false`));
+        console.log(chalk.gray(`                  → Apple migrates existing ${territoryId} subscribers at next billing`));
+        console.log(chalk.gray(`                  → increases trigger Apple's customer-consent flow; decreases auto-apply`));
+
+        if (!options.confirm) {
+          console.log(chalk.yellow('\n[dry-run] no API call fired. Pass --confirm to actually migrate.'));
+          return;
+        }
+
+        const newPriceId = await client.migrateSubscriptionBasePrice(foundSubId, territoryId, priceSummary.price_point_id);
+        console.log(chalk.green(`\n✓ Migration triggered (new subscriptionPrice id: ${newPriceId}). Apple handles customer notification + billing-cycle transition.`));
+      } catch (error) {
+        console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    });
 }
 
 /**
