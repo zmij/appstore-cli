@@ -57,6 +57,10 @@ import {
   inAppPurchasesV2CreateInstance,
   subscriptionGroupsCreateInstance,
   subscriptionsCreateInstance,
+  // Subscription introductory offers (Phase 3a)
+  subscriptionsIntroductoryOffersGetToManyRelated,
+  subscriptionIntroductoryOffersCreateInstance,
+  subscriptionIntroductoryOffersDeleteInstance,
   // IAP / subscription pricing + availability
   inAppPurchasesV2IapPriceScheduleGetToOneRelated,
   inAppPurchasePriceSchedulesBaseTerritoryGetToOneRelated,
@@ -967,6 +971,95 @@ export class AppStoreClient {
     });
     throwIfError(resp);
     return (resp.data?.data as any)?.id ?? '';
+  }
+
+  // ============================================================================
+  // Subscription introductory offers (Phase 3a)
+  // ============================================================================
+  //
+  // An introductory offer is a one-shot incentive ASC attaches to a
+  // subscription for new subscribers. Three modes:
+  //   * FREE_TRIAL: N periods free, no price point needed.
+  //   * PAY_AS_YOU_GO: discounted rate for N periods, price point required.
+  //   * PAY_UP_FRONT: one-time discounted price for N periods, price point
+  //     required.
+  //
+  // Offers can be scoped to a single territory or apply globally (omit
+  // territory). Multiple offers can coexist on one subscription as long
+  // as their (mode, duration, territory) tuples don't collide.
+
+  /** List every intro offer attached to one subscription. */
+  async listSubscriptionIntroductoryOffers(subscriptionId: string): Promise<any[]> {
+    const resp = await subscriptionsIntroductoryOffersGetToManyRelated({
+      client: this.client,
+      path: { id: subscriptionId },
+      query: { include: ['territory', 'subscriptionPricePoint'] as any, limit: 200 } as any,
+    });
+    return ((resp.data?.data as any[]) ?? []).map((r: any) => ({
+      ...r,
+      // Flatten the included territory + price-point onto the row for the
+      // caller's convenience — saves them walking the JSON:API envelope.
+      _territory: r.relationships?.territory?.data?.id ?? null,
+      _price_point_id: r.relationships?.subscriptionPricePoint?.data?.id ?? null,
+    }));
+  }
+
+  /**
+   * Create one intro offer. `territory` omitted = global. `pricePointId`
+   * required for PAY_AS_YOU_GO and PAY_UP_FRONT; ignored (and may be
+   * omitted) for FREE_TRIAL.
+   */
+  async createSubscriptionIntroductoryOffer(opts: {
+    subscriptionId: string;
+    duration: 'THREE_DAYS' | 'ONE_WEEK' | 'TWO_WEEKS' | 'ONE_MONTH' | 'TWO_MONTHS' | 'THREE_MONTHS' | 'SIX_MONTHS' | 'ONE_YEAR';
+    offerMode: 'FREE_TRIAL' | 'PAY_AS_YOU_GO' | 'PAY_UP_FRONT';
+    numberOfPeriods: number;
+    territory?: string;
+    pricePointId?: string;
+    startDate?: string;
+    endDate?: string;
+  }): Promise<string> {
+    const relationships: any = {
+      subscription: { data: { id: opts.subscriptionId, type: 'subscriptions' } },
+    };
+    if (opts.territory) {
+      relationships.territory = { data: { id: opts.territory, type: 'territories' } };
+    }
+    if (opts.pricePointId) {
+      relationships.subscriptionPricePoint = {
+        data: { id: opts.pricePointId, type: 'subscriptionPricePoints' },
+      };
+    }
+
+    const attributes: any = {
+      duration: opts.duration,
+      offerMode: opts.offerMode,
+      numberOfPeriods: opts.numberOfPeriods,
+    };
+    if (opts.startDate) attributes.startDate = opts.startDate;
+    if (opts.endDate) attributes.endDate = opts.endDate;
+
+    const resp = await subscriptionIntroductoryOffersCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'subscriptionIntroductoryOffers',
+          attributes,
+          relationships,
+        },
+      } as any,
+    });
+    throwIfError(resp);
+    return (resp.data?.data as any)?.id ?? '';
+  }
+
+  /** Delete one intro offer by id. */
+  async deleteSubscriptionIntroductoryOffer(offerId: string): Promise<void> {
+    const resp = await subscriptionIntroductoryOffersDeleteInstance({
+      client: this.client,
+      path: { id: offerId },
+    });
+    throwIfError(resp);
   }
 
   // ============================================================================

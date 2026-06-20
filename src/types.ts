@@ -90,6 +90,32 @@ export interface SubscriptionGroup {
   localisations?: Record<string, SubscriptionGroupLocalisation>;
 }
 
+/**
+ * One subscription introductory offer.
+ *
+ * Modes:
+ *   * FREE_TRIAL — N periods free. No `price` field needed.
+ *   * PAY_AS_YOU_GO — discounted recurring price for N periods. `price`
+ *     required.
+ *   * PAY_UP_FRONT — one-time discounted price for N periods total.
+ *     `price` required.
+ *
+ * `territory` scopes the offer to one ISO3 territory; omit for global.
+ * `start_date` / `end_date` are optional ISO8601 dates (default = open-
+ * ended).
+ */
+export interface IntroOffer {
+  mode: 'FREE_TRIAL' | 'PAY_AS_YOU_GO' | 'PAY_UP_FRONT';
+  duration: 'THREE_DAYS' | 'ONE_WEEK' | 'TWO_WEEKS' | 'ONE_MONTH' | 'TWO_MONTHS' | 'THREE_MONTHS' | 'SIX_MONTHS' | 'ONE_YEAR';
+  periods: number;
+  /** Required for PAY_AS_YOU_GO / PAY_UP_FRONT; ignored for FREE_TRIAL. */
+  price?: string;
+  /** Optional: scope to a single ISO3 territory (omit for global). */
+  territory?: string;
+  start_date?: string;
+  end_date?: string;
+}
+
 export interface Subscription {
   reference_name: string;
   /** Which subscription_groups entry this sub lives in. Required for
@@ -104,6 +130,11 @@ export interface Subscription {
   group_level?: number;
   price?: IAPPrice;
   availability?: IAPAvailability;
+  /** Introductory offers attached to this subscription. The sync uses a
+   *  smart diff: matches by (mode, duration, periods, territory) tuple,
+   *  creates anything in YAML but not on ASC, deletes anything on ASC
+   *  but not in YAML. */
+  intro_offers?: IntroOffer[];
   localisations: Record<string, IAPLocalisation>;
 }
 

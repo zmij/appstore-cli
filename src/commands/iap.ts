@@ -8,7 +8,7 @@ import type { Command } from 'commander';
 import chalk from 'chalk';
 import { createClient } from '../client.js';
 import { LANGUAGE_MAP } from '../types.js';
-import type { IAPMetadata, IAPLocalisation, SubscriptionGroupLocalisation } from '../types.js';
+import type { IAPMetadata, IAPLocalisation, IntroOffer, SubscriptionGroupLocalisation } from '../types.js';
 
 export function registerIAPCommands(program: Command): void {
   const iapCmd = program.command('iap').description('Manage in-app purchases and subscriptions');
@@ -118,6 +118,7 @@ export function registerIAPCommands(program: Command): void {
         let errorCount = 0;
         let priceCount = 0;
         let availabilityCount = 0;
+        let introOfferCount = 0;
 
         // Resolve YAML `territories: 'all'` to the live set already on
         // the product — handy for stay-at-full-coverage edits where the
@@ -334,6 +335,84 @@ export function registerIAPCommands(program: Command): void {
                 }
               }
             }
+
+            // Intro offers — smart diff against the live set. Match by
+            // (mode, duration, periods, territory) tuple; create what's
+            // in YAML but not on ASC; delete what's on ASC but not in
+            // YAML. Idempotent and minimal-change.
+            if (config.intro_offers) {
+              const liveOffers = await client.listSubscriptionIntroductoryOffers(existingSubscription.id);
+              const offerKey = (mode: string, dur: string, per: number, terr?: string | null) =>
+                `${mode}|${dur}|${per}|${terr ?? '*'}`;
+              const yamlKeys = new Set(
+                config.intro_offers.map((o) => offerKey(o.mode, o.duration, o.periods, o.territory)),
+              );
+              const liveKeys = new Map<string, any>();
+              for (const off of liveOffers) {
+                const k = offerKey(
+                  off.attributes?.offerMode, off.attributes?.duration,
+                  off.attributes?.numberOfPeriods, off._territory,
+                );
+                liveKeys.set(k, off);
+              }
+
+              // Create offers present in YAML but not live.
+              for (const offer of config.intro_offers) {
+                const key = offerKey(offer.mode, offer.duration, offer.periods, offer.territory);
+                if (liveKeys.has(key)) {
+                  console.log(chalk.gray(`    intro_offer unchanged: ${offer.mode} ${offer.periods}×${offer.duration}${offer.territory ? ` (${offer.territory})` : ''}`));
+                  continue;
+                }
+                console.log(`    intro_offer ${chalk.green('create')}: ${offer.mode} ${offer.periods}×${offer.duration}${offer.territory ? ` (${offer.territory})` : ' (global)'}${offer.price ? ` @ ${offer.price}` : ''}`);
+                if (options.dryRun) continue;
+                try {
+                  let pricePointId: string | undefined;
+                  if (offer.mode !== 'FREE_TRIAL') {
+                    if (!offer.price) {
+                      throw new Error(`intro_offer mode=${offer.mode} requires a \`price\` field`);
+                    }
+                    if (offer.price.startsWith('pricePoint:')) {
+                      // Round-tripped opaque id from export — pass through.
+                      pricePointId = offer.price.slice('pricePoint:'.length);
+                    } else {
+                      // Resolve customer-facing price to a point id.
+                      const territoryForLookup = offer.territory ?? 'USA';
+                      pricePointId = await client.findSubscriptionPricePoint(
+                        existingSubscription.id, territoryForLookup, offer.price,
+                      );
+                    }
+                  }
+                  await client.createSubscriptionIntroductoryOffer({
+                    subscriptionId: existingSubscription.id,
+                    duration: offer.duration,
+                    offerMode: offer.mode,
+                    numberOfPeriods: offer.periods,
+                    territory: offer.territory,
+                    pricePointId,
+                    startDate: offer.start_date,
+                    endDate: offer.end_date,
+                  });
+                  introOfferCount++;
+                } catch (err) {
+                  errorCount++;
+                  console.error(chalk.red(`      ✗ ${err instanceof Error ? err.message : err}`));
+                }
+              }
+
+              // Delete offers live but not in YAML.
+              for (const [key, off] of liveKeys.entries()) {
+                if (yamlKeys.has(key)) continue;
+                console.log(`    intro_offer ${chalk.red('delete')}: ${off.attributes?.offerMode} ${off.attributes?.numberOfPeriods}×${off.attributes?.duration}${off._territory ? ` (${off._territory})` : ' (global)'}`);
+                if (options.dryRun) continue;
+                try {
+                  await client.deleteSubscriptionIntroductoryOffer(off.id);
+                  introOfferCount++;
+                } catch (err) {
+                  errorCount++;
+                  console.error(chalk.red(`      ✗ ${err instanceof Error ? err.message : err}`));
+                }
+              }
+            }
           }
         }
 
@@ -346,6 +425,7 @@ export function registerIAPCommands(program: Command): void {
         if (createdCount > 0) console.log(chalk.green(`  new: ${createdCount}`));
         if (priceCount > 0) console.log(chalk.green(`Price schedules: ${priceCount}`));
         if (availabilityCount > 0) console.log(chalk.green(`Availabilities: ${availabilityCount}`));
+        if (introOfferCount > 0) console.log(chalk.green(`Intro offers (created+deleted): ${introOfferCount}`));
         if (errorCount > 0) console.log(chalk.red(`  errors: ${errorCount}`));
         if (errorCount > 0) process.exit(1);
       } catch (error) {
@@ -475,10 +555,11 @@ export function registerIAPCommands(program: Command): void {
             const productId = sub.attributes?.productId;
             if (!productId) continue;
 
-            const [locs, price, availability] = await Promise.all([
+            const [locs, price, availability, introOffers] = await Promise.all([
               client.listSubscriptionLocalisations(sub.id),
               client.getSubscriptionPriceSummary(sub.id),
               client.getSubscriptionAvailability(sub.id),
+              client.listSubscriptionIntroductoryOffers(sub.id),
             ]);
 
             const yamlLocs: Record<string, IAPLocalisation> = {};
@@ -489,6 +570,31 @@ export function registerIAPCommands(program: Command): void {
                 display_name: l.attributes?.name ?? '',
                 description: l.attributes?.description ?? '',
               };
+            }
+
+            // Pull each intro offer's customer-facing price from the
+            // attached price-point row (for FREE_TRIAL there is none, so
+            // leave price unset).
+            const yamlIntroOffers: IntroOffer[] = [];
+            for (const off of introOffers) {
+              const mode = off.attributes?.offerMode;
+              const duration = off.attributes?.duration;
+              const periods = off.attributes?.numberOfPeriods;
+              if (!mode || !duration || periods === undefined) continue;
+              const entry: IntroOffer = { mode, duration, periods };
+              if (off._territory) entry.territory = off._territory;
+              if (off.attributes?.startDate) entry.start_date = off.attributes.startDate;
+              if (off.attributes?.endDate) entry.end_date = off.attributes.endDate;
+              if (mode !== 'FREE_TRIAL' && off._price_point_id) {
+                // Round-tripping the customer price needs a follow-up
+                // request to subscriptionPricePoints — but for the
+                // common FREE_TRIAL case we can skip the extra hop. For
+                // paid intro offers, surface the opaque price-point id
+                // as a comment so the operator can replace with the
+                // customer-facing tier they want.
+                entry.price = `pricePoint:${off._price_point_id}`;
+              }
+              yamlIntroOffers.push(entry);
             }
 
             metadata.subscriptions[productId] = {
@@ -511,12 +617,14 @@ export function registerIAPCommands(program: Command): void {
                   territories: allShorthand(availability.territories),
                 },
               }),
+              ...(yamlIntroOffers.length > 0 && { intro_offers: yamlIntroOffers }),
               localisations: yamlLocs,
             };
             const priceLabel = price ? `${price.base_price} ${price.base_territory}` : 'no price';
             const availLabel = availability ? `${availability.territories.length} terr` : 'no avail';
+            const offerLabel = yamlIntroOffers.length > 0 ? `, ${yamlIntroOffers.length} intro` : '';
             console.log(
-              `  Exported subscription: ${productId} (group ${group.attributes?.referenceName ?? group.id}, ${Object.keys(yamlLocs).length} locales, ${priceLabel}, ${availLabel})`,
+              `  Exported subscription: ${productId} (group ${group.attributes?.referenceName ?? group.id}, ${Object.keys(yamlLocs).length} locales, ${priceLabel}, ${availLabel}${offerLabel})`,
             );
           }
         }
@@ -607,6 +715,26 @@ export function registerIAPCommands(program: Command): void {
           console.log(`    territories: ${availability.territories.length} (first 10: ${availability.territories.slice(0, 10).join(', ')}${availability.territories.length > 10 ? '…' : ''})`);
         } else {
           console.log(chalk.gray('\n  Availability: (not yet set)'));
+        }
+
+        // Intro offers are subscription-only; skip for one-shot IAPs.
+        if (kind === 'subscription') {
+          const offers = await client.listSubscriptionIntroductoryOffers(productAscId);
+          if (offers.length === 0) {
+            console.log(chalk.gray('\n  Intro offers: (none)'));
+          } else {
+            console.log(chalk.bold(`\n  Intro offers (${offers.length}):`));
+            for (const o of offers) {
+              const mode = o.attributes?.offerMode ?? '?';
+              const dur = o.attributes?.duration ?? '?';
+              const periods = o.attributes?.numberOfPeriods ?? '?';
+              const territory = o._territory ?? chalk.gray('(global)');
+              const window = o.attributes?.startDate || o.attributes?.endDate
+                ? ` [${o.attributes?.startDate ?? '∞'} → ${o.attributes?.endDate ?? '∞'}]`
+                : '';
+              console.log(`    ${chalk.cyan(mode)} ${periods} × ${dur} — territory: ${territory}${window}`);
+            }
+          }
         }
 
         console.log(chalk.bold(`\n  ${locs.length} localisation(s):\n`));
