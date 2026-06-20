@@ -1353,106 +1353,202 @@ function mergeYamlLocalisations(
  * Print per-product divergence between the committed YAML and live ASC.
  * Read-only; used as a pre-flight before sync (push) or pull (merge).
  *
- * Categorises each (entry, field) as:
+ * Recursive walker — finds leaf-level mismatches (`localisations/en-GB/
+ * description`, `price/base_price`, `intro_offers/FREE_TRIAL+ONE_WEEK+...`,
+ * `availability/territories[added]/CHN`) so a single typo in a long
+ * territory list doesn't produce a 200-character JSON-blob row.
+ *
+ * Categories:
  *   `local-only` — in YAML, missing from ASC (sync would create)
  *   `live-only`  — on ASC, missing from YAML (pull would add)
  *   `mismatch`   — present in both with different values
  */
+
+/**
+ * Path-segment → id-field lookup for array elements. Unknown arrays
+ * fall back to a positional walk (no Apple arrays use that path
+ * today; territories[] short-circuits to set-diff, intro_offers[]
+ * uses the tuple key below).
+ */
+const APPLE_ARRAY_ID_FIELDS: Record<string, string> = {
+  // No array-of-objects in Apple's schema needs id matching beyond
+  // intro_offers (which is keyed by tuple, see introOfferKey).
+};
+
+/** intro_offers items are uniquely identified by (mode, duration,
+ *  periods, territory). `territory` is optional — global offers have
+ *  it undefined; we collapse to '__global' for keying. */
+function introOfferKey(o: any): string {
+  if (!o || typeof o !== 'object') return '';
+  return [
+    o.mode ?? '?',
+    o.duration ?? '?',
+    o.periods ?? '?',
+    o.territory ?? '__global',
+  ].join('+');
+}
+
+type DiffCategory = 'local-only' | 'live-only' | 'mismatch';
+interface AppleDiffRow {
+  category: DiffCategory;
+  path: string;
+  yaml?: any;
+  live?: any;
+}
+
+function formatScalarForDiff(v: any): string {
+  if (v === undefined) return chalk.gray('(missing)');
+  if (typeof v === 'string') return v.length > 60 ? `${v.slice(0, 57)}…` : v;
+  if (typeof v === 'object') return JSON.stringify(v).slice(0, 60);
+  return String(v);
+}
+
+function deepDiff(yamlVal: any, liveVal: any, path: string, segName: string, out: AppleDiffRow[]): void {
+  // Treat null and undefined as the same "missing" — the wire omits
+  // null fields; YAML may carry either.
+  const yMissing = yamlVal === undefined || yamlVal === null;
+  const lMissing = liveVal === undefined || liveVal === null;
+  if (yMissing && lMissing) return;
+  if (yMissing) {
+    out.push({ category: 'live-only', path, live: liveVal });
+    return;
+  }
+  if (lMissing) {
+    out.push({ category: 'local-only', path, yaml: yamlVal });
+    return;
+  }
+
+  const yArr = Array.isArray(yamlVal);
+  const lArr = Array.isArray(liveVal);
+  if (yArr !== lArr) {
+    out.push({ category: 'mismatch', path, yaml: yamlVal, live: liveVal });
+    return;
+  }
+
+  if (yArr && lArr) {
+    // Special case: territories[] is a primitive string list of ~170
+    // entries — set-based diff is the only useful output.
+    if (segName === 'territories') {
+      const ySet = new Set(yamlVal as string[]);
+      const lSet = new Set(liveVal as string[]);
+      const added = [...lSet].filter((t) => !ySet.has(t)).sort();
+      const removed = [...ySet].filter((t) => !lSet.has(t)).sort();
+      for (const t of added) out.push({ category: 'live-only', path: `${path}/${t}` });
+      for (const t of removed) out.push({ category: 'local-only', path: `${path}/${t}` });
+      return;
+    }
+    // intro_offers[] — match by composite tuple key, recurse per match.
+    if (segName === 'intro_offers') {
+      const yMap = new Map<string, any>();
+      const lMap = new Map<string, any>();
+      for (const it of yamlVal as any[]) yMap.set(introOfferKey(it), it);
+      for (const it of liveVal as any[]) lMap.set(introOfferKey(it), it);
+      const keys = new Set([...yMap.keys(), ...lMap.keys()]);
+      for (const k of [...keys].sort()) {
+        deepDiff(yMap.get(k), lMap.get(k), `${path}/${k}`, 'intro_offer', out);
+      }
+      return;
+    }
+    // Generic array path: id-matched if we know the field, else positional.
+    const idField = APPLE_ARRAY_ID_FIELDS[segName];
+    if (idField) {
+      const yMap = new Map<string, any>();
+      const lMap = new Map<string, any>();
+      for (const item of yamlVal as any[]) {
+        const k = item?.[idField];
+        if (k != null) yMap.set(String(k), item);
+      }
+      for (const item of liveVal as any[]) {
+        const k = item?.[idField];
+        if (k != null) lMap.set(String(k), item);
+      }
+      const ids = new Set([...yMap.keys(), ...lMap.keys()]);
+      for (const id of [...ids].sort()) {
+        deepDiff(yMap.get(id), lMap.get(id), `${path}/${id}`, idField, out);
+      }
+    } else {
+      const max = Math.max(yamlVal.length, liveVal.length);
+      for (let i = 0; i < max; i++) {
+        deepDiff(yamlVal[i], liveVal[i], `${path}[${i}]`, `${segName}[]`, out);
+      }
+    }
+    return;
+  }
+
+  const yObj = typeof yamlVal === 'object';
+  const lObj = typeof liveVal === 'object';
+  if (yObj !== lObj) {
+    out.push({ category: 'mismatch', path, yaml: yamlVal, live: liveVal });
+    return;
+  }
+  if (yObj && lObj) {
+    const keys = new Set([...Object.keys(yamlVal), ...Object.keys(liveVal)]);
+    for (const k of [...keys].sort()) {
+      deepDiff(yamlVal[k], liveVal[k], `${path}/${k}`, k, out);
+    }
+    return;
+  }
+
+  if (yamlVal !== liveVal) {
+    out.push({ category: 'mismatch', path, yaml: yamlVal, live: liveVal });
+  }
+}
+
 function diffIapMetadata(
-  yaml: IAPMetadata,
+  yamlState: IAPMetadata,
   live: IAPMetadata,
   scopedProductId?: string,
 ): void {
   const matchesScope = (id: string) => !scopedProductId || scopedProductId === id;
-  let total = 0;
+  const rows: AppleDiffRow[] = [];
 
-  const report = (kind: 'local-only' | 'live-only' | 'mismatch', path: string, detail?: string) => {
-    const colour = kind === 'mismatch' ? chalk.yellow : kind === 'live-only' ? chalk.green : chalk.cyan;
-    console.log(`  ${colour(kind.padEnd(11))} ${path}${detail ? ` — ${detail}` : ''}`);
-    total++;
-  };
-
-  const diffEntry = (
-    section: string,
-    productId: string,
-    yamlEntry: any,
-    liveEntry: any,
-    fields: string[],
-  ) => {
-    if (yamlEntry == null && liveEntry == null) return;
-    if (yamlEntry == null) {
-      report('live-only', `${section}/${productId}`);
-      return;
-    }
-    if (liveEntry == null) {
-      report('local-only', `${section}/${productId}`);
-      return;
-    }
-    let header = false;
-    const emit = (kind: 'local-only' | 'live-only' | 'mismatch', sub: string, detail?: string) => {
-      if (!header) {
-        console.log(chalk.bold(`\n${section}/${productId}:`));
-        header = true;
-      }
-      report(kind, `  ${sub}`, detail);
-    };
-    for (const field of fields) {
-      const y = yamlEntry[field];
-      const l = liveEntry[field];
-      const ySet = y !== undefined && y !== null && !(Array.isArray(y) && y.length === 0);
-      const lSet = l !== undefined && l !== null && !(Array.isArray(l) && l.length === 0);
-      if (!ySet && !lSet) continue;
-      if (ySet && !lSet) { emit('local-only', field); continue; }
-      if (!ySet && lSet) { emit('live-only', field); continue; }
-      const yJson = JSON.stringify(y);
-      const lJson = JSON.stringify(l);
-      if (yJson !== lJson) {
-        emit('mismatch', field, `yaml=${truncate(yJson, 40)}  live=${truncate(lJson, 40)}`);
-      }
-    }
-    // Localisations: per-language drift.
-    const yLocs = yamlEntry.localisations ?? {};
-    const lLocs = liveEntry.localisations ?? {};
-    const langs = new Set([...Object.keys(yLocs), ...Object.keys(lLocs)]);
-    for (const lang of langs) {
-      if (yLocs[lang] && !lLocs[lang]) emit('local-only', `localisations/${lang}`);
-      else if (!yLocs[lang] && lLocs[lang]) emit('live-only', `localisations/${lang}`);
-      else {
-        const yj = JSON.stringify(yLocs[lang]);
-        const lj = JSON.stringify(lLocs[lang]);
-        if (yj !== lj) emit('mismatch', `localisations/${lang}`, `yaml=${truncate(yj, 40)} live=${truncate(lj, 40)}`);
-      }
-    }
-  };
-
-  const yamlIds = (m: Record<string, any> | undefined) => new Set(Object.keys(m ?? {}));
-  // Subscription groups
-  for (const id of new Set([...yamlIds(yaml.subscription_groups), ...yamlIds(live.subscription_groups)])) {
+  // Subscription groups (Apple-only; no Play equivalent).
+  const yamlGroups = yamlState.subscription_groups ?? {};
+  const liveGroups = live.subscription_groups ?? {};
+  const groupIds = new Set([...Object.keys(yamlGroups), ...Object.keys(liveGroups)]);
+  for (const id of groupIds) {
     if (!matchesScope(id)) continue;
-    diffEntry('subscription_groups', id, yaml.subscription_groups?.[id], live.subscription_groups?.[id], []);
-  }
-  // Purchases
-  for (const id of new Set([...yamlIds(yaml.purchases), ...yamlIds(live.purchases)])) {
-    if (!matchesScope(id)) continue;
-    diffEntry('purchases', id, yaml.purchases?.[id], live.purchases?.[id],
-      ['type', 'family_sharable', 'price', 'availability', 'review_screenshot']);
-  }
-  // Subscriptions
-  for (const id of new Set([...yamlIds(yaml.subscriptions), ...yamlIds(live.subscriptions)])) {
-    if (!matchesScope(id)) continue;
-    diffEntry('subscriptions', id, yaml.subscriptions?.[id], live.subscriptions?.[id],
-      ['group', 'subscription_period', 'family_sharable', 'group_level', 'price', 'availability', 'intro_offers', 'review_screenshot']);
+    deepDiff(yamlGroups[id], liveGroups[id], `subscription_groups/${id}`, 'group', rows);
   }
 
-  console.log('');
-  if (total === 0) {
+  const yamlPurchases = yamlState.purchases ?? {};
+  const livePurchases = live.purchases ?? {};
+  const purchaseIds = new Set([...Object.keys(yamlPurchases), ...Object.keys(livePurchases)]);
+  for (const id of purchaseIds) {
+    if (!matchesScope(id)) continue;
+    deepDiff(yamlPurchases[id], livePurchases[id], `purchases/${id}`, 'purchase', rows);
+  }
+
+  const yamlSubs = yamlState.subscriptions ?? {};
+  const liveSubs = live.subscriptions ?? {};
+  const subIds = new Set([...Object.keys(yamlSubs), ...Object.keys(liveSubs)]);
+  for (const id of subIds) {
+    if (!matchesScope(id)) continue;
+    deepDiff(yamlSubs[id], liveSubs[id], `subscriptions/${id}`, 'subscription', rows);
+  }
+
+  if (rows.length === 0) {
     console.log(chalk.green('No divergence detected — YAML and live ASC match.'));
-  } else {
-    console.log(chalk.bold(`${total} divergence(s).`));
-    console.log(chalk.gray(`  • local-only → run \`iap sync\` to push it`));
-    console.log(chalk.gray(`  • live-only  → run \`iap pull\` to absorb it`));
-    console.log(chalk.gray(`  • mismatch   → decide manually before sync or pull`));
+    return;
   }
+
+  rows.sort((a, b) => a.path.localeCompare(b.path));
+  for (const row of rows) {
+    const colour = row.category === 'local-only' ? chalk.cyan
+      : row.category === 'live-only' ? chalk.green
+        : chalk.yellow;
+    if (row.category === 'mismatch') {
+      console.log(`  ${colour(row.category.padEnd(11))} ${row.path}`);
+      console.log(`              ${chalk.gray('yaml:')} ${formatScalarForDiff(row.yaml)}`);
+      console.log(`              ${chalk.gray('live:')} ${formatScalarForDiff(row.live)}`);
+    } else {
+      console.log(`  ${colour(row.category.padEnd(11))} ${row.path}`);
+    }
+  }
+  console.log(chalk.bold(`\n${rows.length} divergence(s).`));
+  console.log(chalk.gray(`  • local-only → run \`iap sync\` (or \`iap create\` if the whole entry is new) to push it`));
+  console.log(chalk.gray(`  • live-only  → run \`iap pull\` to absorb it`));
+  console.log(chalk.gray(`  • mismatch   → decide manually: \`iap sync\` overwrites live, \`iap pull\` does not overwrite local`));
 }
 
 async function applyIapExtras(
