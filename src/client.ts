@@ -53,6 +53,10 @@ import {
   subscriptionLocalizationsCreateInstance,
   subscriptionLocalizationsUpdateInstance,
   subscriptionLocalizationsDeleteInstance,
+  // IAP / subscription create (Phase 5)
+  inAppPurchasesV2CreateInstance,
+  subscriptionGroupsCreateInstance,
+  subscriptionsCreateInstance,
   // IAP / subscription pricing + availability
   inAppPurchasesV2IapPriceScheduleGetToOneRelated,
   inAppPurchasePriceSchedulesBaseTerritoryGetToOneRelated,
@@ -860,6 +864,109 @@ export class AppStoreClient {
       path: { id: localisationId },
     });
     throwIfError(resp);
+  }
+
+  // ============================================================================
+  // IAP / Subscription product create (Phase 5)
+  // ============================================================================
+  //
+  // These three creators are the "from scratch" path — they create the
+  // product record itself. Pricing / availability / localisations layer
+  // on top via the methods below; `iap create` chains them together so
+  // a YAML record turns into a fully-shaped ASC product in one shot.
+
+  /**
+   * Create a new in-app purchase. `productId` is the developer-facing
+   * key used by your billing layer (e.g. `premium_lifetime`). Hard-fails
+   * (via the API's own conflict) if the productId already exists — call
+   * `listInAppPurchases` upfront to dedup beforehand.
+   */
+  async createInAppPurchase(opts: {
+    productId: string;
+    name: string;
+    type: 'CONSUMABLE' | 'NON_CONSUMABLE' | 'NON_RENEWING_SUBSCRIPTION';
+    familySharable?: boolean;
+    reviewNote?: string;
+  }): Promise<string> {
+    const resp = await inAppPurchasesV2CreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'inAppPurchases',
+          attributes: {
+            name: opts.name,
+            productId: opts.productId,
+            inAppPurchaseType: opts.type,
+            familySharable: opts.familySharable ?? false,
+            ...(opts.reviewNote && { reviewNote: opts.reviewNote }),
+          },
+          relationships: {
+            app: { data: { id: this.appId, type: 'apps' } },
+          },
+        },
+      } as any,
+    });
+    throwIfError(resp);
+    return (resp.data?.data as any)?.id ?? '';
+  }
+
+  /**
+   * Create a new subscription group. The group is the container that
+   * lets users upgrade/downgrade between tiers (monthly ↔ yearly within
+   * the same family). Returns the ASC group id.
+   */
+  async createSubscriptionGroup(referenceName: string): Promise<string> {
+    const resp = await subscriptionGroupsCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'subscriptionGroups',
+          attributes: { referenceName },
+          relationships: {
+            app: { data: { id: this.appId, type: 'apps' } },
+          },
+        },
+      } as any,
+    });
+    throwIfError(resp);
+    return (resp.data?.data as any)?.id ?? '';
+  }
+
+  /**
+   * Create a new subscription inside an existing group. The
+   * `subscriptionPeriod` enum is required; `groupLevel` optional (Apple
+   * orders tiers within a group by this for the upgrade UI).
+   */
+  async createSubscription(opts: {
+    groupId: string;
+    productId: string;
+    name: string;
+    subscriptionPeriod: 'ONE_WEEK' | 'ONE_MONTH' | 'TWO_MONTHS' | 'THREE_MONTHS' | 'SIX_MONTHS' | 'ONE_YEAR';
+    familySharable?: boolean;
+    reviewNote?: string;
+    groupLevel?: number;
+  }): Promise<string> {
+    const resp = await subscriptionsCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'subscriptions',
+          attributes: {
+            name: opts.name,
+            productId: opts.productId,
+            subscriptionPeriod: opts.subscriptionPeriod,
+            familySharable: opts.familySharable ?? false,
+            ...(opts.reviewNote && { reviewNote: opts.reviewNote }),
+            ...(opts.groupLevel !== undefined && { groupLevel: opts.groupLevel }),
+          },
+          relationships: {
+            group: { data: { id: opts.groupId, type: 'subscriptionGroups' } },
+          },
+        },
+      } as any,
+    });
+    throwIfError(resp);
+    return (resp.data?.data as any)?.id ?? '';
   }
 
   // ============================================================================

@@ -75,18 +75,42 @@ export interface InAppPurchase {
   localisations: Record<string, IAPLocalisation>;
 }
 
+/** A localised name for a subscription group (the family-of-tiers
+ *  container). `custom_app_name` overrides how the app is referred to
+ *  in the subscriptions sheet for that locale; optional. */
+export interface SubscriptionGroupLocalisation {
+  name: string;
+  custom_app_name?: string;
+}
+
+/** A subscription group — declared once in `subscription_groups`,
+ *  referenced by name from individual subscriptions. */
+export interface SubscriptionGroup {
+  reference_name: string;
+  localisations?: Record<string, SubscriptionGroupLocalisation>;
+}
+
 export interface Subscription {
   reference_name: string;
-  /** Subscription duration (e.g. "ONE_MONTH"). Immutable on existing
-   *  subscriptions; emitted by export for round-trip clarity. */
-  subscription_period?: string;
+  /** Which subscription_groups entry this sub lives in. Required for
+   *  create; on export filled in from the live group's referenceName. */
+  group?: string;
+  /** Subscription duration enum. Immutable on existing subscriptions;
+   *  emitted by export and required for create. */
+  subscription_period?: 'ONE_WEEK' | 'ONE_MONTH' | 'TWO_MONTHS' | 'THREE_MONTHS' | 'SIX_MONTHS' | 'ONE_YEAR';
   family_sharable?: boolean;
+  /** Apple uses this to order tiers within a group for the upgrade UI;
+   *  lower numbers are "higher" tiers. Optional. */
+  group_level?: number;
   price?: IAPPrice;
   availability?: IAPAvailability;
   localisations: Record<string, IAPLocalisation>;
 }
 
 export interface IAPMetadata {
+  /** Optional — only required if any subscriptions reference a group
+   *  not already on ASC. The CLI creates groups before subscriptions. */
+  subscription_groups?: Record<string, SubscriptionGroup>;
   purchases: Record<string, InAppPurchase>;
   subscriptions: Record<string, Subscription>;
 }

@@ -8,7 +8,7 @@ import type { Command } from 'commander';
 import chalk from 'chalk';
 import { createClient } from '../client.js';
 import { LANGUAGE_MAP } from '../types.js';
-import type { IAPMetadata, IAPLocalisation } from '../types.js';
+import type { IAPMetadata, IAPLocalisation, SubscriptionGroupLocalisation } from '../types.js';
 
 export function registerIAPCommands(program: Command): void {
   const iapCmd = program.command('iap').description('Manage in-app purchases and subscriptions');
@@ -370,6 +370,7 @@ export function registerIAPCommands(program: Command): void {
         console.log(chalk.blue('Exporting IAP metadata...\n'));
 
         const metadata: IAPMetadata = {
+          subscription_groups: {},
           purchases: {},
           subscriptions: {},
         };
@@ -448,9 +449,27 @@ export function registerIAPCommands(program: Command): void {
         // -- Subscription groups → subscriptions ------------------------
         // The YAML schema keys subscriptions by productId at the top
         // level (no nested group structure), so flatten group → subs
-        // here and key by each subscription's productId.
+        // here and key by each subscription's productId. The group's own
+        // shape (reference_name + locs) emits to subscription_groups so
+        // a future `iap create` can reconstruct it.
         const groups = await client.listSubscriptions();
         for (const group of groups) {
+          const groupRefName = group.attributes?.referenceName ?? group.id;
+          const groupLocs = await client.listSubscriptionGroupLocalisations(group.id);
+          const yamlGroupLocs: Record<string, SubscriptionGroupLocalisation> = {};
+          for (const l of groupLocs) {
+            const locale = l.attributes?.locale;
+            if (!locale) continue;
+            yamlGroupLocs[shortLang(locale)] = {
+              name: l.attributes?.name ?? '',
+              ...(l.attributes?.customAppName && { custom_app_name: l.attributes.customAppName }),
+            };
+          }
+          metadata.subscription_groups![groupRefName] = {
+            reference_name: groupRefName,
+            ...(Object.keys(yamlGroupLocs).length > 0 && { localisations: yamlGroupLocs }),
+          };
+
           const subs = await client.listSubscriptionsInGroup(group.id);
           for (const sub of subs) {
             const productId = sub.attributes?.productId;
@@ -474,8 +493,12 @@ export function registerIAPCommands(program: Command): void {
 
             metadata.subscriptions[productId] = {
               reference_name: sub.attributes?.name || productId,
+              group: groupRefName,
               subscription_period: sub.attributes?.subscriptionPeriod,
               family_sharable: sub.attributes?.familySharable,
+              ...(sub.attributes?.groupLevel !== undefined && {
+                group_level: sub.attributes.groupLevel,
+              }),
               ...(price && {
                 price: {
                   base_territory: price.base_territory,
@@ -608,6 +631,308 @@ export function registerIAPCommands(program: Command): void {
         process.exit(1);
       }
     });
+
+  // Create new IAPs / subscription groups / subscriptions from the YAML.
+  // Hard-fails per item when a productId / group reference name already
+  // exists on ASC, but continues walking the rest of the YAML so a
+  // partial run can finish and the operator only retries the gaps.
+  iapCmd
+    .command('create')
+    .description('Create new IAPs, subscription groups, and subscriptions from YAML (hard-fails on duplicates)')
+    .option('--product-id <productId>', 'Create only the entry with this productId / group ref_name')
+    .option('--dry-run', 'Show what would be created without applying')
+    .option('--key-id <keyId>', 'Use specific auth key')
+    .action(async (options) => {
+      try {
+        const { readFileSync, existsSync } = await import('fs');
+        const { join } = await import('path');
+        const { parse: parseYaml } = await import('yaml');
+        const { getWorktreeRoot } = await import('../auth.js');
+
+        const worktreeRoot = getWorktreeRoot();
+        const iapPath = join(worktreeRoot, 'l10n', 'metadata', 'apple', 'iap.yaml');
+        if (!existsSync(iapPath)) {
+          console.error(chalk.red(`IAP metadata file not found: ${iapPath}`));
+          process.exit(1);
+        }
+        const metadata = parseYaml(readFileSync(iapPath, 'utf-8')) as IAPMetadata;
+
+        const client = createClient(options.keyId);
+
+        console.log(chalk.blue('Creating new IAPs / groups / subscriptions from YAML...'));
+        if (options.dryRun) console.log(chalk.yellow('DRY RUN - no changes will be made\n'));
+
+        // Snapshot what's already on ASC so we can hard-fail on
+        // collisions without each create call costing a round trip.
+        const [livePurchases, liveGroups] = await Promise.all([
+          client.listInAppPurchases(),
+          client.listSubscriptions(),
+        ]);
+        const livePurchaseIds = new Set(livePurchases.map((p: any) => p.attributes?.productId));
+        const liveGroupRefs = new Map<string, string>(); // refName → ASC id
+        const liveSubIds = new Set<string>();
+        for (const g of liveGroups) {
+          const refName = g.attributes?.referenceName;
+          if (refName) liveGroupRefs.set(refName, g.id);
+          const subs = await client.listSubscriptionsInGroup(g.id);
+          for (const s of subs) {
+            const pid = s.attributes?.productId;
+            if (pid) liveSubIds.add(pid);
+          }
+        }
+
+        let createdGroups = 0;
+        let createdPurchases = 0;
+        let createdSubscriptions = 0;
+        let failures = 0;
+
+        const groupRefToAscId = new Map<string, string>(liveGroupRefs);
+
+        // -- Subscription groups (must come first; subs depend on them) ---
+        if (metadata.subscription_groups) {
+          console.log(chalk.bold('\nSubscription groups:'));
+          for (const [yamlKey, group] of Object.entries(metadata.subscription_groups)) {
+            const refName = group.reference_name;
+            if (options.productId && options.productId !== yamlKey && options.productId !== refName) continue;
+            console.log(chalk.cyan(`\n  ${yamlKey} (ref ${refName}):`));
+
+            if (liveGroupRefs.has(refName)) {
+              console.log(chalk.red(`    ✗ already exists on ASC (id ${liveGroupRefs.get(refName)}) — skipping`));
+              failures++;
+              continue;
+            }
+
+            if (options.dryRun) {
+              console.log(chalk.green(`    create (dry-run)`));
+              continue;
+            }
+            try {
+              const newId = await client.createSubscriptionGroup(refName);
+              groupRefToAscId.set(refName, newId);
+              console.log(chalk.green(`    ✓ created (id ${newId})`));
+              createdGroups++;
+              // Push group-level localisations if any.
+              for (const [lang, loc] of Object.entries(group.localisations ?? {})) {
+                const locale = LANGUAGE_MAP[lang] || lang;
+                await client.upsertSubscriptionGroupLocalisation(newId, locale, {
+                  name: loc.name,
+                  ...(loc.custom_app_name && { customAppName: loc.custom_app_name }),
+                });
+                console.log(`      + ${locale} loc: ${loc.name}`);
+              }
+            } catch (err) {
+              failures++;
+              console.error(chalk.red(`    ✗ ${err instanceof Error ? err.message : err}`));
+            }
+          }
+        }
+
+        // -- Purchases ----------------------------------------------------
+        if (metadata.purchases) {
+          console.log(chalk.bold('\nIn-App Purchases:'));
+          for (const [productId, config] of Object.entries(metadata.purchases)) {
+            if (options.productId && options.productId !== productId) continue;
+            console.log(chalk.cyan(`\n  ${productId}:`));
+
+            if (livePurchaseIds.has(productId)) {
+              console.log(chalk.red(`    ✗ already exists on ASC — skipping (use \`iap sync\` for updates)`));
+              failures++;
+              continue;
+            }
+            if (!config.type) {
+              console.log(chalk.red(`    ✗ YAML missing required field \`type\` (CONSUMABLE | NON_CONSUMABLE | NON_RENEWING_SUBSCRIPTION)`));
+              failures++;
+              continue;
+            }
+
+            if (options.dryRun) {
+              console.log(chalk.green(`    create (dry-run) — type ${config.type}, family_sharable ${!!config.family_sharable}`));
+              continue;
+            }
+            try {
+              const newId = await client.createInAppPurchase({
+                productId,
+                name: config.reference_name || productId,
+                type: config.type,
+                familySharable: config.family_sharable,
+              });
+              console.log(chalk.green(`    ✓ created (id ${newId})`));
+              createdPurchases++;
+              await applyIapExtras(client, newId, config);
+            } catch (err) {
+              failures++;
+              console.error(chalk.red(`    ✗ ${err instanceof Error ? err.message : err}`));
+            }
+          }
+        }
+
+        // -- Subscriptions ------------------------------------------------
+        if (metadata.subscriptions) {
+          console.log(chalk.bold('\nSubscriptions:'));
+          for (const [productId, config] of Object.entries(metadata.subscriptions)) {
+            if (options.productId && options.productId !== productId) continue;
+            console.log(chalk.cyan(`\n  ${productId}:`));
+
+            if (liveSubIds.has(productId)) {
+              console.log(chalk.red(`    ✗ already exists on ASC — skipping (use \`iap sync\` for updates)`));
+              failures++;
+              continue;
+            }
+            if (!config.group) {
+              console.log(chalk.red(`    ✗ YAML missing required field \`group\` (reference name of the subscription group)`));
+              failures++;
+              continue;
+            }
+            const groupId = groupRefToAscId.get(config.group);
+            if (!groupId) {
+              console.log(chalk.red(`    ✗ subscription group "${config.group}" not found on ASC — declare it under \`subscription_groups\` first`));
+              failures++;
+              continue;
+            }
+            if (!config.subscription_period) {
+              console.log(chalk.red(`    ✗ YAML missing required field \`subscription_period\` (e.g. ONE_MONTH, ONE_YEAR)`));
+              failures++;
+              continue;
+            }
+
+            if (options.dryRun) {
+              console.log(chalk.green(`    create (dry-run) — period ${config.subscription_period}, group ${config.group} (id ${groupId})`));
+              continue;
+            }
+            try {
+              const newId = await client.createSubscription({
+                groupId,
+                productId,
+                name: config.reference_name || productId,
+                subscriptionPeriod: config.subscription_period,
+                familySharable: config.family_sharable,
+                groupLevel: config.group_level,
+              });
+              console.log(chalk.green(`    ✓ created (id ${newId})`));
+              createdSubscriptions++;
+              await applySubExtras(client, newId, config);
+            } catch (err) {
+              failures++;
+              console.error(chalk.red(`    ✗ ${err instanceof Error ? err.message : err}`));
+            }
+          }
+        }
+
+        console.log(chalk.blue('\n--- Summary ---'));
+        if (options.dryRun) console.log(chalk.yellow('DRY RUN - no changes were made'));
+        if (createdGroups > 0) console.log(chalk.green(`Subscription groups created: ${createdGroups}`));
+        if (createdPurchases > 0) console.log(chalk.green(`IAPs created: ${createdPurchases}`));
+        if (createdSubscriptions > 0) console.log(chalk.green(`Subscriptions created: ${createdSubscriptions}`));
+        if (failures > 0) {
+          console.log(chalk.red(`Failures / skipped: ${failures}`));
+          process.exit(1);
+        }
+      } catch (error) {
+        console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    });
+}
+
+/**
+ * After an IAP is created, push its price / availability / localisations
+ * to bring the product to a fully-shaped state. Errors here are logged
+ * but don't roll back the create — the IAP exists and the operator can
+ * re-run `iap sync` to retry the missing extras.
+ */
+async function applyIapExtras(
+  client: ReturnType<typeof createClient>,
+  iapId: string,
+  config: NonNullable<IAPMetadata['purchases']>[string],
+): Promise<void> {
+  if (config.price) {
+    try {
+      const pp = await client.findInAppPurchasePricePoint(
+        iapId, config.price.base_territory, config.price.base_price,
+      );
+      await client.createInAppPurchasePriceSchedule(iapId, config.price.base_territory, pp);
+      console.log(`      + price: ${config.price.base_price} ${config.price.base_territory}`);
+    } catch (err) {
+      console.error(chalk.red(`      ✗ price: ${err instanceof Error ? err.message : err}`));
+    }
+  }
+  if (config.availability) {
+    try {
+      const territories = config.availability.territories === 'all'
+        // For a fresh product there's no "current" set to fall back on,
+        // so 'all' here is a placeholder the operator needs to expand.
+        ? []
+        : config.availability.territories;
+      if (territories.length === 0) {
+        console.error(chalk.red(`      ✗ availability: 'all' shorthand requires expanding to an explicit territory list for newly-created products`));
+      } else {
+        await client.createInAppPurchaseAvailability(
+          iapId, config.availability.available_in_new_territories, territories,
+        );
+        console.log(`      + availability: ${territories.length} territories`);
+      }
+    } catch (err) {
+      console.error(chalk.red(`      ✗ availability: ${err instanceof Error ? err.message : err}`));
+    }
+  }
+  for (const [lang, loc] of Object.entries(config.localisations ?? {})) {
+    const locale = LANGUAGE_MAP[lang] || lang;
+    try {
+      await client.upsertInAppPurchaseLocalisation(iapId, locale, {
+        name: loc.display_name,
+        description: loc.description,
+      });
+      console.log(`      + ${locale} loc`);
+    } catch (err) {
+      console.error(chalk.red(`      ✗ ${locale} loc: ${err instanceof Error ? err.message : err}`));
+    }
+  }
+}
+
+/** Same as applyIapExtras but for subscriptions (different ASC types). */
+async function applySubExtras(
+  client: ReturnType<typeof createClient>,
+  subId: string,
+  config: NonNullable<IAPMetadata['subscriptions']>[string],
+): Promise<void> {
+  if (config.price) {
+    try {
+      const pp = await client.findSubscriptionPricePoint(
+        subId, config.price.base_territory, config.price.base_price,
+      );
+      await client.createSubscriptionBasePrice(subId, config.price.base_territory, pp);
+      console.log(`      + price: ${config.price.base_price} ${config.price.base_territory}`);
+    } catch (err) {
+      console.error(chalk.red(`      ✗ price: ${err instanceof Error ? err.message : err}`));
+    }
+  }
+  if (config.availability) {
+    try {
+      const territories = config.availability.territories === 'all' ? [] : config.availability.territories;
+      if (territories.length === 0) {
+        console.error(chalk.red(`      ✗ availability: 'all' shorthand requires an explicit territory list for new products`));
+      } else {
+        await client.createSubscriptionAvailability(
+          subId, config.availability.available_in_new_territories, territories,
+        );
+        console.log(`      + availability: ${territories.length} territories`);
+      }
+    } catch (err) {
+      console.error(chalk.red(`      ✗ availability: ${err instanceof Error ? err.message : err}`));
+    }
+  }
+  for (const [lang, loc] of Object.entries(config.localisations ?? {})) {
+    const locale = LANGUAGE_MAP[lang] || lang;
+    try {
+      await client.upsertSubscriptionLocalisation(subId, locale, {
+        name: loc.display_name,
+        description: loc.description,
+      });
+      console.log(`      + ${locale} loc`);
+    } catch (err) {
+      console.error(chalk.red(`      ✗ ${locale} loc: ${err instanceof Error ? err.message : err}`));
+    }
+  }
 }
 
 function truncate(text: string, maxLength: number): string {
