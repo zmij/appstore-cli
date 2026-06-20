@@ -472,9 +472,10 @@ export function registerIAPCommands(program: Command): void {
     });
 
   // Export current IAP metadata to YAML (round-trips localisations).
+  // OVERWRITE semantics — for surgical updates use `iap pull` instead.
   iapCmd
     .command('export')
-    .description('Export current IAP metadata + localisations to YAML')
+    .description('Export the live ASC catalogue to a YAML file (OVERWRITES the target — use `iap pull` for additive merge)')
     .requiredOption('--output <file>', 'Output YAML file path')
     .option('--key-id <keyId>', 'Use specific auth key')
     .action(async (options) => {
@@ -483,191 +484,93 @@ export function registerIAPCommands(program: Command): void {
         const { stringify } = await import('yaml');
 
         const client = createClient(options.keyId);
-
         console.log(chalk.blue('Exporting IAP metadata...\n'));
 
-        const metadata: IAPMetadata = {
-          subscription_groups: {},
-          purchases: {},
-          subscriptions: {},
-        };
-
-        // Reverse map: ASC locale ("en-US", "de-DE") → short YAML lang
-        // ("en", "de"). Multiple short tags may share a long form; first
-        // wins. Falls back to the long form when no mapping is known.
-        const reverseLocaleMap = new Map<string, string>();
-        for (const [shortLang, longLocale] of Object.entries(LANGUAGE_MAP)) {
-          if (!reverseLocaleMap.has(longLocale)) {
-            reverseLocaleMap.set(longLocale, shortLang);
-          }
-        }
-        const shortLang = (loc: string): string => reverseLocaleMap.get(loc) ?? loc;
-
-        // Helper: emit `'all'` when the live territory list contains
-        // every territory the export run knows about, otherwise the full
-        // ISO3 array. Lets human-edited YAML stay terse for the common
-        // "available everywhere" case.
-        const knownTerritoryCount = new Map<number, true>(); // tracked below
-        const allShorthand = (live: string[]): string[] | 'all' => {
-          // Apple ships ~175 territories total today; if a product covers
-          // every entry on a reference roster we tag the export as "all".
-          // We snapshot the largest list seen during this run as the
-          // reference — pragmatic but stable across products that ship
-          // everywhere.
-          knownTerritoryCount.set(live.length, true);
-          return live;
-        };
-
-        // -- Purchases --------------------------------------------------
-        const purchases = await client.listInAppPurchases();
-        for (const purchase of purchases) {
-          const productId = purchase.attributes?.productId;
-          if (!productId) continue;
-
-          const [locs, price, availability] = await Promise.all([
-            client.listInAppPurchaseLocalisations(purchase.id),
-            client.getInAppPurchasePriceSummary(purchase.id),
-            client.getInAppPurchaseAvailability(purchase.id),
-          ]);
-
-          const yamlLocs: Record<string, IAPLocalisation> = {};
-          for (const l of locs) {
-            const locale = l.attributes?.locale;
-            if (!locale) continue;
-            yamlLocs[shortLang(locale)] = {
-              display_name: l.attributes?.name ?? '',
-              description: l.attributes?.description ?? '',
-            };
-          }
-
-          metadata.purchases[productId] = {
-            reference_name: purchase.attributes?.referenceName || '',
-            type: purchase.attributes?.inAppPurchaseType,
-            family_sharable: purchase.attributes?.familySharable,
-            ...(price && {
-              price: {
-                base_territory: price.base_territory,
-                base_price: price.base_price,
-              },
-            }),
-            ...(availability && {
-              availability: {
-                available_in_new_territories: availability.available_in_new_territories,
-                territories: allShorthand(availability.territories),
-              },
-            }),
-            localisations: yamlLocs,
-          };
-          const priceLabel = price ? `${price.base_price} ${price.base_territory}` : 'no price';
-          const availLabel = availability ? `${availability.territories.length} terr` : 'no avail';
-          console.log(`  Exported purchase: ${productId} (${Object.keys(yamlLocs).length} locales, ${priceLabel}, ${availLabel})`);
-        }
-
-        // -- Subscription groups → subscriptions ------------------------
-        // The YAML schema keys subscriptions by productId at the top
-        // level (no nested group structure), so flatten group → subs
-        // here and key by each subscription's productId. The group's own
-        // shape (reference_name + locs) emits to subscription_groups so
-        // a future `iap create` can reconstruct it.
-        const groups = await client.listSubscriptions();
-        for (const group of groups) {
-          const groupRefName = group.attributes?.referenceName ?? group.id;
-          const groupLocs = await client.listSubscriptionGroupLocalisations(group.id);
-          const yamlGroupLocs: Record<string, SubscriptionGroupLocalisation> = {};
-          for (const l of groupLocs) {
-            const locale = l.attributes?.locale;
-            if (!locale) continue;
-            yamlGroupLocs[shortLang(locale)] = {
-              name: l.attributes?.name ?? '',
-              ...(l.attributes?.customAppName && { custom_app_name: l.attributes.customAppName }),
-            };
-          }
-          metadata.subscription_groups![groupRefName] = {
-            reference_name: groupRefName,
-            ...(Object.keys(yamlGroupLocs).length > 0 && { localisations: yamlGroupLocs }),
-          };
-
-          const subs = await client.listSubscriptionsInGroup(group.id);
-          for (const sub of subs) {
-            const productId = sub.attributes?.productId;
-            if (!productId) continue;
-
-            const [locs, price, availability, introOffers] = await Promise.all([
-              client.listSubscriptionLocalisations(sub.id),
-              client.getSubscriptionPriceSummary(sub.id),
-              client.getSubscriptionAvailability(sub.id),
-              client.listSubscriptionIntroductoryOffers(sub.id),
-            ]);
-
-            const yamlLocs: Record<string, IAPLocalisation> = {};
-            for (const l of locs) {
-              const locale = l.attributes?.locale;
-              if (!locale) continue;
-              yamlLocs[shortLang(locale)] = {
-                display_name: l.attributes?.name ?? '',
-                description: l.attributes?.description ?? '',
-              };
-            }
-
-            // Pull each intro offer's customer-facing price from the
-            // attached price-point row (for FREE_TRIAL there is none, so
-            // leave price unset).
-            const yamlIntroOffers: IntroOffer[] = [];
-            for (const off of introOffers) {
-              const mode = off.attributes?.offerMode;
-              const duration = off.attributes?.duration;
-              const periods = off.attributes?.numberOfPeriods;
-              if (!mode || !duration || periods === undefined) continue;
-              const entry: IntroOffer = { mode, duration, periods };
-              if (off._territory) entry.territory = off._territory;
-              if (off.attributes?.startDate) entry.start_date = off.attributes.startDate;
-              if (off.attributes?.endDate) entry.end_date = off.attributes.endDate;
-              if (mode !== 'FREE_TRIAL' && off._price_point_id) {
-                // Round-tripping the customer price needs a follow-up
-                // request to subscriptionPricePoints — but for the
-                // common FREE_TRIAL case we can skip the extra hop. For
-                // paid intro offers, surface the opaque price-point id
-                // as a comment so the operator can replace with the
-                // customer-facing tier they want.
-                entry.price = `pricePoint:${off._price_point_id}`;
-              }
-              yamlIntroOffers.push(entry);
-            }
-
-            metadata.subscriptions[productId] = {
-              reference_name: sub.attributes?.name || productId,
-              group: groupRefName,
-              subscription_period: sub.attributes?.subscriptionPeriod,
-              family_sharable: sub.attributes?.familySharable,
-              ...(sub.attributes?.groupLevel !== undefined && {
-                group_level: sub.attributes.groupLevel,
-              }),
-              ...(price && {
-                price: {
-                  base_territory: price.base_territory,
-                  base_price: price.base_price,
-                },
-              }),
-              ...(availability && {
-                availability: {
-                  available_in_new_territories: availability.available_in_new_territories,
-                  territories: allShorthand(availability.territories),
-                },
-              }),
-              ...(yamlIntroOffers.length > 0 && { intro_offers: yamlIntroOffers }),
-              localisations: yamlLocs,
-            };
-            const priceLabel = price ? `${price.base_price} ${price.base_territory}` : 'no price';
-            const availLabel = availability ? `${availability.territories.length} terr` : 'no avail';
-            const offerLabel = yamlIntroOffers.length > 0 ? `, ${yamlIntroOffers.length} intro` : '';
-            console.log(
-              `  Exported subscription: ${productId} (group ${group.attributes?.referenceName ?? group.id}, ${Object.keys(yamlLocs).length} locales, ${priceLabel}, ${availLabel}${offerLabel})`,
-            );
-          }
-        }
-
+        const metadata = await fetchLiveIapState(client, true /* log progress */);
         writeFileSync(options.output, stringify(metadata));
         console.log(chalk.green(`\n✓ Exported to: ${options.output}`));
+      } catch (error) {
+        console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    });
+
+  // Surgical merge: pull live ASC state into the committed YAML,
+  // preserving comments + key order + local-only fields. The opposite
+  // direction of `iap sync` — call when you've changed something on ASC
+  // by hand (or someone else has) and want the YAML to catch up without
+  // losing your local edits.
+  iapCmd
+    .command('pull')
+    .description('Pull live ASC state into the committed YAML — additive merge, preserves comments + local-only fields')
+    .option('--product-id <productId>', 'Pull a single product / group only')
+    .option('--dry-run', 'Show what would be added/updated without writing')
+    .option('--key-id <keyId>', 'Use specific auth key')
+    .action(async (options) => {
+      try {
+        const { readFileSync, writeFileSync, existsSync } = await import('fs');
+        const { join } = await import('path');
+        const { parseDocument } = await import('yaml');
+        const { getWorktreeRoot } = await import('../auth.js');
+
+        const worktreeRoot = getWorktreeRoot();
+        const iapPath = join(worktreeRoot, 'l10n', 'metadata', 'apple', 'iap.yaml');
+        if (!existsSync(iapPath)) {
+          console.error(chalk.red(`IAP metadata file not found: ${iapPath}`));
+          console.error(chalk.yellow(`First-time setup? Run \`appstore iap export --output ${iapPath}\` to seed it.`));
+          process.exit(1);
+        }
+
+        const client = createClient(options.keyId);
+        console.log(chalk.blue('Pulling live ASC state...'));
+        const live = await fetchLiveIapState(client, false);
+
+        const doc = parseDocument(readFileSync(iapPath, 'utf-8'));
+        const summary = mergeLiveIntoDocument(doc, live, options.productId, options.dryRun ?? false);
+
+        if (!options.dryRun) {
+          writeFileSync(iapPath, String(doc));
+          console.log(chalk.green(`\n✓ Merged into ${iapPath}`));
+        } else {
+          console.log(chalk.yellow('\nDRY RUN — no file written.'));
+        }
+        console.log(`Products added: ${summary.added}`);
+        console.log(`Products updated (gap-filled): ${summary.updated}`);
+        console.log(`Locale slots filled: ${summary.localesAdded}`);
+        console.log(chalk.gray('(existing YAML values are never overwritten; use `iap export` for a full overwrite.)'));
+      } catch (error) {
+        console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
+        process.exit(1);
+      }
+    });
+
+  // Show YAML ↔ live ASC divergence per product. No writes; pure
+  // diagnostic — useful as a pre-flight before `iap sync` or `iap pull`.
+  iapCmd
+    .command('diff')
+    .description('Show per-product divergence between the committed YAML and live ASC (read-only)')
+    .option('--product-id <productId>', 'Diff a single product only')
+    .option('--key-id <keyId>', 'Use specific auth key')
+    .action(async (options) => {
+      try {
+        const { readFileSync, existsSync } = await import('fs');
+        const { join } = await import('path');
+        const { parse: parseYaml } = await import('yaml');
+        const { getWorktreeRoot } = await import('../auth.js');
+
+        const worktreeRoot = getWorktreeRoot();
+        const iapPath = join(worktreeRoot, 'l10n', 'metadata', 'apple', 'iap.yaml');
+        if (!existsSync(iapPath)) {
+          console.error(chalk.red(`IAP metadata file not found: ${iapPath}`));
+          process.exit(1);
+        }
+
+        const yamlState = parseYaml(readFileSync(iapPath, 'utf-8')) as IAPMetadata;
+        const client = createClient(options.keyId);
+        console.log(chalk.blue('Diffing YAML vs live ASC...\n'));
+        const live = await fetchLiveIapState(client, false);
+
+        diffIapMetadata(yamlState, live, options.productId);
       } catch (error) {
         console.error(chalk.red('Error:'), error instanceof Error ? error.message : error);
         process.exit(1);
@@ -1019,6 +922,427 @@ export function registerIAPCommands(program: Command): void {
  * but don't roll back the create — the IAP exists and the operator can
  * re-run `iap sync` to retry the missing extras.
  */
+/**
+ * Pull every IAP / subscription group / subscription from ASC into the
+ * same shape the YAML uses. Single source of truth used by `iap export`
+ * (overwrite-the-file mode), `iap pull` (additive-merge mode), and
+ * `iap diff` (read-only comparison).
+ *
+ * Set `logProgress` true to emit per-product "Exported …" lines
+ * (matches the historical `iap export` UX); pull + diff pass false.
+ */
+async function fetchLiveIapState(
+  client: ReturnType<typeof createClient>,
+  logProgress: boolean,
+): Promise<IAPMetadata> {
+  const metadata: IAPMetadata = {
+    subscription_groups: {},
+    purchases: {},
+    subscriptions: {},
+  };
+
+  // Reverse map: ASC locale ("en-US", "de-DE") → short YAML lang ("en",
+  // "de"). Multiple short tags may share a long form; first wins.
+  const reverseLocaleMap = new Map<string, string>();
+  for (const [shortLang, longLocale] of Object.entries(LANGUAGE_MAP)) {
+    if (!reverseLocaleMap.has(longLocale)) {
+      reverseLocaleMap.set(longLocale, shortLang);
+    }
+  }
+  const shortLang = (loc: string): string => reverseLocaleMap.get(loc) ?? loc;
+
+  // -- Purchases ----------------------------------------------------
+  const purchases = await client.listInAppPurchases();
+  for (const purchase of purchases) {
+    const productId = purchase.attributes?.productId;
+    if (!productId) continue;
+
+    const [locs, price, availability] = await Promise.all([
+      client.listInAppPurchaseLocalisations(purchase.id),
+      client.getInAppPurchasePriceSummary(purchase.id),
+      client.getInAppPurchaseAvailability(purchase.id),
+    ]);
+
+    const yamlLocs: Record<string, IAPLocalisation> = {};
+    for (const l of locs) {
+      const locale = l.attributes?.locale;
+      if (!locale) continue;
+      yamlLocs[shortLang(locale)] = {
+        display_name: l.attributes?.name ?? '',
+        description: l.attributes?.description ?? '',
+      };
+    }
+
+    metadata.purchases[productId] = {
+      reference_name: purchase.attributes?.name || productId,
+      type: purchase.attributes?.inAppPurchaseType,
+      family_sharable: purchase.attributes?.familySharable,
+      ...(price && {
+        price: { base_territory: price.base_territory, base_price: price.base_price },
+      }),
+      ...(availability && {
+        availability: {
+          available_in_new_territories: availability.available_in_new_territories,
+          territories: availability.territories,
+        },
+      }),
+      localisations: yamlLocs,
+    };
+    if (logProgress) {
+      const priceLabel = price ? `${price.base_price} ${price.base_territory}` : 'no price';
+      const availLabel = availability ? `${availability.territories.length} terr` : 'no avail';
+      console.log(`  Exported purchase: ${productId} (${Object.keys(yamlLocs).length} locales, ${priceLabel}, ${availLabel})`);
+    }
+  }
+
+  // -- Subscription groups → subscriptions --------------------------
+  const groups = await client.listSubscriptions();
+  for (const group of groups) {
+    const groupRefName = group.attributes?.referenceName ?? group.id;
+    const groupLocs = await client.listSubscriptionGroupLocalisations(group.id);
+    const yamlGroupLocs: Record<string, SubscriptionGroupLocalisation> = {};
+    for (const l of groupLocs) {
+      const locale = l.attributes?.locale;
+      if (!locale) continue;
+      yamlGroupLocs[shortLang(locale)] = {
+        name: l.attributes?.name ?? '',
+        ...(l.attributes?.customAppName && { custom_app_name: l.attributes.customAppName }),
+      };
+    }
+    metadata.subscription_groups![groupRefName] = {
+      reference_name: groupRefName,
+      ...(Object.keys(yamlGroupLocs).length > 0 && { localisations: yamlGroupLocs }),
+    };
+
+    const subs = await client.listSubscriptionsInGroup(group.id);
+    for (const sub of subs) {
+      const productId = sub.attributes?.productId;
+      if (!productId) continue;
+
+      const [locs, price, availability, introOffers] = await Promise.all([
+        client.listSubscriptionLocalisations(sub.id),
+        client.getSubscriptionPriceSummary(sub.id),
+        client.getSubscriptionAvailability(sub.id),
+        client.listSubscriptionIntroductoryOffers(sub.id),
+      ]);
+
+      const yamlLocs: Record<string, IAPLocalisation> = {};
+      for (const l of locs) {
+        const locale = l.attributes?.locale;
+        if (!locale) continue;
+        yamlLocs[shortLang(locale)] = {
+          display_name: l.attributes?.name ?? '',
+          description: l.attributes?.description ?? '',
+        };
+      }
+
+      const yamlIntroOffers: IntroOffer[] = [];
+      for (const off of introOffers) {
+        const mode = off.attributes?.offerMode;
+        const duration = off.attributes?.duration;
+        const periods = off.attributes?.numberOfPeriods;
+        if (!mode || !duration || periods === undefined) continue;
+        const entry: IntroOffer = { mode, duration, periods };
+        if (off._territory) entry.territory = off._territory;
+        if (off.attributes?.startDate) entry.start_date = off.attributes.startDate;
+        if (off.attributes?.endDate) entry.end_date = off.attributes.endDate;
+        if (mode !== 'FREE_TRIAL' && off._price_point_id) {
+          entry.price = `pricePoint:${off._price_point_id}`;
+        }
+        yamlIntroOffers.push(entry);
+      }
+
+      metadata.subscriptions[productId] = {
+        reference_name: sub.attributes?.name || productId,
+        group: groupRefName,
+        subscription_period: sub.attributes?.subscriptionPeriod,
+        family_sharable: sub.attributes?.familySharable,
+        ...(sub.attributes?.groupLevel !== undefined && { group_level: sub.attributes.groupLevel }),
+        ...(price && {
+          price: { base_territory: price.base_territory, base_price: price.base_price },
+        }),
+        ...(availability && {
+          availability: {
+            available_in_new_territories: availability.available_in_new_territories,
+            territories: availability.territories,
+          },
+        }),
+        ...(yamlIntroOffers.length > 0 && { intro_offers: yamlIntroOffers }),
+        localisations: yamlLocs,
+      };
+      if (logProgress) {
+        const priceLabel = price ? `${price.base_price} ${price.base_territory}` : 'no price';
+        const availLabel = availability ? `${availability.territories.length} terr` : 'no avail';
+        const offerLabel = yamlIntroOffers.length > 0 ? `, ${yamlIntroOffers.length} intro` : '';
+        console.log(
+          `  Exported subscription: ${productId} (group ${groupRefName}, ${Object.keys(yamlLocs).length} locales, ${priceLabel}, ${availLabel}${offerLabel})`,
+        );
+      }
+    }
+  }
+
+  return metadata;
+}
+
+/**
+ * Merge live ASC state into a yaml Document AST, preserving comments,
+ * key order, and any local-only fields. Strict additive semantics:
+ *
+ *   - A product/group present in `live` but missing from YAML is added.
+ *   - A product/group present in both has its MISSING fields filled
+ *     in from live; existing fields are left untouched.
+ *   - Locales present in live but missing from a product's YAML
+ *     localisations are added.
+ *
+ * Never deletes or overwrites — that's `iap export`'s job. Returns a
+ * tally of what changed so the caller can report (or detect no-op).
+ */
+function mergeLiveIntoDocument(
+  doc: any,                // yaml.Document
+  live: IAPMetadata,
+  scopedProductId: string | undefined,
+  dryRun: boolean,
+): { added: number; updated: number; localesAdded: number } {
+  let added = 0;
+  let updated = 0;
+  let localesAdded = 0;
+
+  const matchesScope = (id: string) => !scopedProductId || scopedProductId === id;
+
+  // yaml v2: doc.get(key) returns the JS value; doc.get(key, true) returns
+  // the YAMLMap node we need to call .has()/.set()/.get() on. Always pass
+  // `true` here so we operate on nodes, not value snapshots.
+  for (const top of ['subscription_groups', 'purchases', 'subscriptions']) {
+    if (!doc.has(top)) doc.set(top, doc.createNode({}));
+  }
+
+  // -- Subscription groups -----------------------------------------
+  const groupsNode = doc.get('subscription_groups', true);
+  for (const [groupKey, groupLive] of Object.entries(live.subscription_groups ?? {})) {
+    if (!matchesScope(groupKey)) continue;
+    if (!groupsNode.has(groupKey)) {
+      console.log(chalk.green(`+ subscription_group: ${groupKey}`));
+      if (!dryRun) groupsNode.set(groupKey, doc.createNode(groupLive));
+      added++;
+    } else {
+      // Fill localisation gaps only.
+      const liveLocs = groupLive.localisations ?? {};
+      const yamlGroup = groupsNode.get(groupKey, true);
+      let yamlLocs = yamlGroup.get('localisations', true);
+      for (const [lang, loc] of Object.entries(liveLocs)) {
+        if (!yamlLocs) {
+          console.log(chalk.green(`+ subscription_group/${groupKey}/localisations`));
+          if (!dryRun) {
+            yamlGroup.set('localisations', doc.createNode({ [lang]: loc }));
+            yamlLocs = yamlGroup.get('localisations', true);
+          }
+          localesAdded++;
+          updated++;
+          continue;
+        }
+        if (!yamlLocs.has(lang)) {
+          console.log(chalk.green(`+ subscription_group/${groupKey}/localisations/${lang}`));
+          if (!dryRun) yamlLocs.set(lang, doc.createNode(loc));
+          localesAdded++;
+        }
+      }
+    }
+  }
+
+  // -- Purchases ----------------------------------------------------
+  const purchasesNode = doc.get('purchases', true);
+  for (const [productId, livePurchase] of Object.entries(live.purchases)) {
+    if (!matchesScope(productId)) continue;
+    if (!purchasesNode.has(productId)) {
+      console.log(chalk.green(`+ purchase: ${productId}`));
+      if (!dryRun) purchasesNode.set(productId, doc.createNode(livePurchase));
+      added++;
+    } else {
+      const yamlEntry = purchasesNode.get(productId, true);
+      const before = { added, localesAdded };
+      mergeYamlEntryFields(doc, yamlEntry, livePurchase, ['type', 'family_sharable', 'price', 'availability'], dryRun, `purchases/${productId}`);
+      mergeYamlLocalisations(doc, yamlEntry, livePurchase.localisations, dryRun, `purchases/${productId}`, (n) => { localesAdded += n; });
+      if (added !== before.added || localesAdded !== before.localesAdded) updated++;
+    }
+  }
+
+  // -- Subscriptions ------------------------------------------------
+  const subsNode = doc.get('subscriptions', true);
+  for (const [productId, liveSub] of Object.entries(live.subscriptions)) {
+    if (!matchesScope(productId)) continue;
+    if (!subsNode.has(productId)) {
+      console.log(chalk.green(`+ subscription: ${productId}`));
+      if (!dryRun) subsNode.set(productId, doc.createNode(liveSub));
+      added++;
+    } else {
+      const yamlEntry = subsNode.get(productId, true);
+      const before = { added, localesAdded };
+      mergeYamlEntryFields(
+        doc, yamlEntry, liveSub,
+        ['group', 'subscription_period', 'family_sharable', 'group_level', 'price', 'availability', 'intro_offers'],
+        dryRun, `subscriptions/${productId}`,
+      );
+      mergeYamlLocalisations(doc, yamlEntry, liveSub.localisations, dryRun, `subscriptions/${productId}`, (n) => { localesAdded += n; });
+      if (added !== before.added || localesAdded !== before.localesAdded) updated++;
+    }
+  }
+
+  return { added, updated, localesAdded };
+}
+
+/** Fill missing top-level fields on a yaml Map node from a live entry. */
+function mergeYamlEntryFields(
+  doc: any,                 // yaml.Document — needed for createNode
+  yamlEntry: any,           // yaml.YAMLMap
+  liveEntry: Record<string, any>,
+  fields: string[],
+  dryRun: boolean,
+  pathLabel: string,
+): void {
+  for (const field of fields) {
+    const liveVal = (liveEntry as any)[field];
+    if (liveVal === undefined) continue;
+    if (yamlEntry.has(field)) continue;
+    console.log(chalk.green(`+ ${pathLabel}/${field}`));
+    if (!dryRun) yamlEntry.set(field, doc.createNode(liveVal));
+  }
+}
+
+/** Union a live localisations map into a yaml entry — additive only. */
+function mergeYamlLocalisations(
+  doc: any,
+  yamlEntry: any,
+  liveLocs: Record<string, any> | undefined,
+  dryRun: boolean,
+  pathLabel: string,
+  onAdded: (count: number) => void,
+): void {
+  if (!liveLocs) return;
+  let yamlLocs = yamlEntry.get('localisations', true);
+  for (const [lang, loc] of Object.entries(liveLocs)) {
+    if (!yamlLocs) {
+      console.log(chalk.green(`+ ${pathLabel}/localisations`));
+      if (!dryRun) {
+        yamlEntry.set('localisations', doc.createNode({ [lang]: loc }));
+        yamlLocs = yamlEntry.get('localisations', true);
+      }
+      onAdded(1);
+      continue;
+    }
+    if (!yamlLocs.has(lang)) {
+      console.log(chalk.green(`+ ${pathLabel}/localisations/${lang}`));
+      if (!dryRun) yamlLocs.set(lang, doc.createNode(loc));
+      onAdded(1);
+    }
+  }
+}
+
+/**
+ * Print per-product divergence between the committed YAML and live ASC.
+ * Read-only; used as a pre-flight before sync (push) or pull (merge).
+ *
+ * Categorises each (entry, field) as:
+ *   `local-only` — in YAML, missing from ASC (sync would create)
+ *   `live-only`  — on ASC, missing from YAML (pull would add)
+ *   `mismatch`   — present in both with different values
+ */
+function diffIapMetadata(
+  yaml: IAPMetadata,
+  live: IAPMetadata,
+  scopedProductId?: string,
+): void {
+  const matchesScope = (id: string) => !scopedProductId || scopedProductId === id;
+  let total = 0;
+
+  const report = (kind: 'local-only' | 'live-only' | 'mismatch', path: string, detail?: string) => {
+    const colour = kind === 'mismatch' ? chalk.yellow : kind === 'live-only' ? chalk.green : chalk.cyan;
+    console.log(`  ${colour(kind.padEnd(11))} ${path}${detail ? ` — ${detail}` : ''}`);
+    total++;
+  };
+
+  const diffEntry = (
+    section: string,
+    productId: string,
+    yamlEntry: any,
+    liveEntry: any,
+    fields: string[],
+  ) => {
+    if (yamlEntry == null && liveEntry == null) return;
+    if (yamlEntry == null) {
+      report('live-only', `${section}/${productId}`);
+      return;
+    }
+    if (liveEntry == null) {
+      report('local-only', `${section}/${productId}`);
+      return;
+    }
+    let header = false;
+    const emit = (kind: 'local-only' | 'live-only' | 'mismatch', sub: string, detail?: string) => {
+      if (!header) {
+        console.log(chalk.bold(`\n${section}/${productId}:`));
+        header = true;
+      }
+      report(kind, `  ${sub}`, detail);
+    };
+    for (const field of fields) {
+      const y = yamlEntry[field];
+      const l = liveEntry[field];
+      const ySet = y !== undefined && y !== null && !(Array.isArray(y) && y.length === 0);
+      const lSet = l !== undefined && l !== null && !(Array.isArray(l) && l.length === 0);
+      if (!ySet && !lSet) continue;
+      if (ySet && !lSet) { emit('local-only', field); continue; }
+      if (!ySet && lSet) { emit('live-only', field); continue; }
+      const yJson = JSON.stringify(y);
+      const lJson = JSON.stringify(l);
+      if (yJson !== lJson) {
+        emit('mismatch', field, `yaml=${truncate(yJson, 40)}  live=${truncate(lJson, 40)}`);
+      }
+    }
+    // Localisations: per-language drift.
+    const yLocs = yamlEntry.localisations ?? {};
+    const lLocs = liveEntry.localisations ?? {};
+    const langs = new Set([...Object.keys(yLocs), ...Object.keys(lLocs)]);
+    for (const lang of langs) {
+      if (yLocs[lang] && !lLocs[lang]) emit('local-only', `localisations/${lang}`);
+      else if (!yLocs[lang] && lLocs[lang]) emit('live-only', `localisations/${lang}`);
+      else {
+        const yj = JSON.stringify(yLocs[lang]);
+        const lj = JSON.stringify(lLocs[lang]);
+        if (yj !== lj) emit('mismatch', `localisations/${lang}`, `yaml=${truncate(yj, 40)} live=${truncate(lj, 40)}`);
+      }
+    }
+  };
+
+  const yamlIds = (m: Record<string, any> | undefined) => new Set(Object.keys(m ?? {}));
+  // Subscription groups
+  for (const id of new Set([...yamlIds(yaml.subscription_groups), ...yamlIds(live.subscription_groups)])) {
+    if (!matchesScope(id)) continue;
+    diffEntry('subscription_groups', id, yaml.subscription_groups?.[id], live.subscription_groups?.[id], []);
+  }
+  // Purchases
+  for (const id of new Set([...yamlIds(yaml.purchases), ...yamlIds(live.purchases)])) {
+    if (!matchesScope(id)) continue;
+    diffEntry('purchases', id, yaml.purchases?.[id], live.purchases?.[id],
+      ['type', 'family_sharable', 'price', 'availability', 'review_screenshot']);
+  }
+  // Subscriptions
+  for (const id of new Set([...yamlIds(yaml.subscriptions), ...yamlIds(live.subscriptions)])) {
+    if (!matchesScope(id)) continue;
+    diffEntry('subscriptions', id, yaml.subscriptions?.[id], live.subscriptions?.[id],
+      ['group', 'subscription_period', 'family_sharable', 'group_level', 'price', 'availability', 'intro_offers', 'review_screenshot']);
+  }
+
+  console.log('');
+  if (total === 0) {
+    console.log(chalk.green('No divergence detected — YAML and live ASC match.'));
+  } else {
+    console.log(chalk.bold(`${total} divergence(s).`));
+    console.log(chalk.gray(`  • local-only → run \`iap sync\` to push it`));
+    console.log(chalk.gray(`  • live-only  → run \`iap pull\` to absorb it`));
+    console.log(chalk.gray(`  • mismatch   → decide manually before sync or pull`));
+  }
+}
+
 async function applyIapExtras(
   client: ReturnType<typeof createClient>,
   iapId: string,
