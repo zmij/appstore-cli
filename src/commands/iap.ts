@@ -119,6 +119,7 @@ export function registerIAPCommands(program: Command): void {
         let priceCount = 0;
         let availabilityCount = 0;
         let introOfferCount = 0;
+        let reviewScreenshotCount = 0;
 
         // Resolve YAML `territories: 'all'` to the live set already on
         // the product — handy for stay-at-full-coverage edits where the
@@ -232,6 +233,25 @@ export function registerIAPCommands(program: Command): void {
                     errorCount++;
                     console.error(chalk.red(`      ✗ ${err instanceof Error ? err.message : err}`));
                   }
+                }
+              }
+            }
+
+            // Review screenshot — Apple allows one per product, so the
+            // sync deletes any existing one and uploads the local file.
+            // No diff (we'd need a checksum the API doesn't expose);
+            // re-runs always re-upload. Cheap enough — files are small.
+            if (config.review_screenshot) {
+              const liveShot = await client.getInAppPurchaseReviewScreenshot(existingPurchase.id);
+              console.log(`    review_screenshot ${liveShot ? chalk.yellow('replace') : chalk.green('upload')}: ${config.review_screenshot}`);
+              if (!options.dryRun) {
+                try {
+                  if (liveShot?.id) await client.deleteInAppPurchaseReviewScreenshot(liveShot.id);
+                  await uploadReviewScreenshotBytes(client, 'purchase', existingPurchase.id, config.review_screenshot);
+                  reviewScreenshotCount++;
+                } catch (err) {
+                  errorCount++;
+                  console.error(chalk.red(`      ✗ ${err instanceof Error ? err.message : err}`));
                 }
               }
             }
@@ -413,6 +433,22 @@ export function registerIAPCommands(program: Command): void {
                 }
               }
             }
+
+            // Review screenshot (subscription side).
+            if (config.review_screenshot) {
+              const liveShot = await client.getSubscriptionReviewScreenshot(existingSubscription.id);
+              console.log(`    review_screenshot ${liveShot ? chalk.yellow('replace') : chalk.green('upload')}: ${config.review_screenshot}`);
+              if (!options.dryRun) {
+                try {
+                  if (liveShot?.id) await client.deleteSubscriptionReviewScreenshot(liveShot.id);
+                  await uploadReviewScreenshotBytes(client, 'subscription', existingSubscription.id, config.review_screenshot);
+                  reviewScreenshotCount++;
+                } catch (err) {
+                  errorCount++;
+                  console.error(chalk.red(`      ✗ ${err instanceof Error ? err.message : err}`));
+                }
+              }
+            }
           }
         }
 
@@ -426,6 +462,7 @@ export function registerIAPCommands(program: Command): void {
         if (priceCount > 0) console.log(chalk.green(`Price schedules: ${priceCount}`));
         if (availabilityCount > 0) console.log(chalk.green(`Availabilities: ${availabilityCount}`));
         if (introOfferCount > 0) console.log(chalk.green(`Intro offers (created+deleted): ${introOfferCount}`));
+        if (reviewScreenshotCount > 0) console.log(chalk.green(`Review screenshots uploaded: ${reviewScreenshotCount}`));
         if (errorCount > 0) console.log(chalk.red(`  errors: ${errorCount}`));
         if (errorCount > 0) process.exit(1);
       } catch (error) {
@@ -715,6 +752,20 @@ export function registerIAPCommands(program: Command): void {
           console.log(`    territories: ${availability.territories.length} (first 10: ${availability.territories.slice(0, 10).join(', ')}${availability.territories.length > 10 ? '…' : ''})`);
         } else {
           console.log(chalk.gray('\n  Availability: (not yet set)'));
+        }
+
+        // Review screenshot — both flavours, one per product.
+        const reviewScreenshot = kind === 'purchase'
+          ? await client.getInAppPurchaseReviewScreenshot(productAscId)
+          : await client.getSubscriptionReviewScreenshot(productAscId);
+        if (reviewScreenshot) {
+          const name = reviewScreenshot.attributes?.fileName ?? '(unnamed)';
+          const size = reviewScreenshot.attributes?.fileSize ?? 0;
+          const uploaded = reviewScreenshot.attributes?.assetDeliveryState?.state ?? 'UPLOADED';
+          console.log(chalk.bold('\n  Review screenshot:'));
+          console.log(`    file: ${name} (${(size / 1024).toFixed(1)} KiB) — ${uploaded}`);
+        } else {
+          console.log(chalk.gray('\n  Review screenshot: (none — required before submission)'));
         }
 
         // Intro offers are subscription-only; skip for one-shot IAPs.
@@ -1060,6 +1111,58 @@ async function applySubExtras(
     } catch (err) {
       console.error(chalk.red(`      ✗ ${locale} loc: ${err instanceof Error ? err.message : err}`));
     }
+  }
+}
+
+/**
+ * Push a local image file as the review screenshot for one IAP or
+ * subscription. Mirrors the reserve → PUT chunks → commit pattern used
+ * by the app-listings screenshot flow. When a screenshot already
+ * exists the caller deletes it first — Apple allows only one per
+ * product.
+ *
+ * `kind` chooses which of the two ASC types we're working against;
+ * the body of the upload (presigned URLs + chunking + MD5 commit) is
+ * identical otherwise.
+ */
+async function uploadReviewScreenshotBytes(
+  client: ReturnType<typeof createClient>,
+  kind: 'purchase' | 'subscription',
+  productAscId: string,
+  filePath: string,
+): Promise<void> {
+  const { readFileSync, statSync, existsSync } = await import('fs');
+  const { createHash } = await import('crypto');
+  const { basename } = await import('path');
+
+  if (!existsSync(filePath)) {
+    throw new Error(`review_screenshot file not found: ${filePath}`);
+  }
+  const bytes = readFileSync(filePath);
+  const size = statSync(filePath).size;
+  const md5 = createHash('md5').update(bytes).digest('hex');
+  const name = basename(filePath);
+
+  const reservation = kind === 'purchase'
+    ? await client.reserveInAppPurchaseReviewScreenshot(productAscId, name, size)
+    : await client.reserveSubscriptionReviewScreenshot(productAscId, name, size);
+
+  // PUT bytes to each presigned operation. ASC may chunk large files,
+  // though review screenshots tend to be small enough to land in one.
+  for (const op of reservation.uploadOperations) {
+    const chunk = bytes.slice(op.offset, op.offset + op.length);
+    const headers: Record<string, string> = {};
+    for (const h of (op.requestHeaders ?? [])) headers[h.name] = h.value;
+    const res = await fetch(op.url, { method: op.method, headers, body: chunk });
+    if (!res.ok) {
+      throw new Error(`review-screenshot chunk upload failed: ${res.status} ${res.statusText}`);
+    }
+  }
+
+  if (kind === 'purchase') {
+    await client.commitInAppPurchaseReviewScreenshot(reservation.id, md5);
+  } else {
+    await client.commitSubscriptionReviewScreenshot(reservation.id, md5);
   }
 }
 

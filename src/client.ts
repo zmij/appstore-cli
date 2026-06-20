@@ -61,6 +61,15 @@ import {
   subscriptionsIntroductoryOffersGetToManyRelated,
   subscriptionIntroductoryOffersCreateInstance,
   subscriptionIntroductoryOffersDeleteInstance,
+  // IAP / subscription review screenshots (Phase 4)
+  inAppPurchasesV2AppStoreReviewScreenshotGetToOneRelated,
+  inAppPurchaseAppStoreReviewScreenshotsCreateInstance,
+  inAppPurchaseAppStoreReviewScreenshotsUpdateInstance,
+  inAppPurchaseAppStoreReviewScreenshotsDeleteInstance,
+  subscriptionsAppStoreReviewScreenshotGetToOneRelated,
+  subscriptionAppStoreReviewScreenshotsCreateInstance,
+  subscriptionAppStoreReviewScreenshotsUpdateInstance,
+  subscriptionAppStoreReviewScreenshotsDeleteInstance,
   // IAP / subscription pricing + availability
   inAppPurchasesV2IapPriceScheduleGetToOneRelated,
   inAppPurchasePriceSchedulesBaseTerritoryGetToOneRelated,
@@ -1058,6 +1067,141 @@ export class AppStoreClient {
     const resp = await subscriptionIntroductoryOffersDeleteInstance({
       client: this.client,
       path: { id: offerId },
+    });
+    throwIfError(resp);
+  }
+
+  // ============================================================================
+  // IAP / Subscription review screenshots (Phase 4)
+  // ============================================================================
+  //
+  // Apple's review team needs a screenshot showing where each IAP /
+  // subscription is purchased inside the app — required before an IAP
+  // can be submitted. Each product carries AT MOST ONE review
+  // screenshot (a single image).
+  //
+  // Upload flow mirrors the appScreenshots flow used for store listings:
+  //   1. createXxxReviewScreenshot(productId, fileName, fileSize) →
+  //      reserves a record + returns uploadOperations (presigned URLs).
+  //   2. caller PUTs the file bytes per operation.
+  //   3. commitXxxReviewScreenshot(screenshotId, md5) → marks uploaded.
+
+  /** Return the review screenshot attached to an IAP, or null when
+   *  there isn't one yet. */
+  async getInAppPurchaseReviewScreenshot(iapId: string): Promise<any | null> {
+    const resp = await inAppPurchasesV2AppStoreReviewScreenshotGetToOneRelated({
+      client: this.client,
+      path: { id: iapId },
+    });
+    return (resp.data?.data as any) ?? null;
+  }
+
+  /** Reserve a review-screenshot upload slot for an IAP. Returns the
+   *  new record id plus the presigned upload operations the caller
+   *  PUTs chunks to. */
+  async reserveInAppPurchaseReviewScreenshot(
+    iapId: string,
+    fileName: string,
+    fileSize: number,
+  ): Promise<{ id: string; uploadOperations: any[] }> {
+    const resp = await inAppPurchaseAppStoreReviewScreenshotsCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'inAppPurchaseAppStoreReviewScreenshots',
+          attributes: { fileName, fileSize },
+          relationships: {
+            inAppPurchaseV2: { data: { id: iapId, type: 'inAppPurchases' } },
+          },
+        },
+      } as any,
+    });
+    throwIfError(resp);
+    return {
+      id: (resp.data?.data as any)?.id ?? '',
+      uploadOperations: ((resp.data?.data as any)?.attributes?.uploadOperations as any[]) ?? [],
+    };
+  }
+
+  /** Mark an IAP review screenshot as uploaded once the bytes are in. */
+  async commitInAppPurchaseReviewScreenshot(screenshotId: string, checksum: string): Promise<void> {
+    const resp = await inAppPurchaseAppStoreReviewScreenshotsUpdateInstance({
+      client: this.client,
+      path: { id: screenshotId },
+      body: {
+        data: {
+          id: screenshotId,
+          type: 'inAppPurchaseAppStoreReviewScreenshots',
+          attributes: { uploaded: true, sourceFileChecksum: checksum },
+        },
+      } as any,
+    });
+    throwIfError(resp);
+  }
+
+  /** Delete an IAP review screenshot. Use before re-uploading a new
+   *  image since each product holds only one. */
+  async deleteInAppPurchaseReviewScreenshot(screenshotId: string): Promise<void> {
+    const resp = await inAppPurchaseAppStoreReviewScreenshotsDeleteInstance({
+      client: this.client,
+      path: { id: screenshotId },
+    });
+    throwIfError(resp);
+  }
+
+  // -- Subscriptions ----------------------------------------------------------
+
+  async getSubscriptionReviewScreenshot(subscriptionId: string): Promise<any | null> {
+    const resp = await subscriptionsAppStoreReviewScreenshotGetToOneRelated({
+      client: this.client,
+      path: { id: subscriptionId },
+    });
+    return (resp.data?.data as any) ?? null;
+  }
+
+  async reserveSubscriptionReviewScreenshot(
+    subscriptionId: string,
+    fileName: string,
+    fileSize: number,
+  ): Promise<{ id: string; uploadOperations: any[] }> {
+    const resp = await subscriptionAppStoreReviewScreenshotsCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'subscriptionAppStoreReviewScreenshots',
+          attributes: { fileName, fileSize },
+          relationships: {
+            subscription: { data: { id: subscriptionId, type: 'subscriptions' } },
+          },
+        },
+      } as any,
+    });
+    throwIfError(resp);
+    return {
+      id: (resp.data?.data as any)?.id ?? '',
+      uploadOperations: ((resp.data?.data as any)?.attributes?.uploadOperations as any[]) ?? [],
+    };
+  }
+
+  async commitSubscriptionReviewScreenshot(screenshotId: string, checksum: string): Promise<void> {
+    const resp = await subscriptionAppStoreReviewScreenshotsUpdateInstance({
+      client: this.client,
+      path: { id: screenshotId },
+      body: {
+        data: {
+          id: screenshotId,
+          type: 'subscriptionAppStoreReviewScreenshots',
+          attributes: { uploaded: true, sourceFileChecksum: checksum },
+        },
+      } as any,
+    });
+    throwIfError(resp);
+  }
+
+  async deleteSubscriptionReviewScreenshot(screenshotId: string): Promise<void> {
+    const resp = await subscriptionAppStoreReviewScreenshotsDeleteInstance({
+      client: this.client,
+      path: { id: screenshotId },
     });
     throwIfError(resp);
   }

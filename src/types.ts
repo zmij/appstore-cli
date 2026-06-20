@@ -72,6 +72,10 @@ export interface InAppPurchase {
   family_sharable?: boolean;
   price?: IAPPrice;
   availability?: IAPAvailability;
+  /** Local path to a PNG / JPEG that Apple Review uses to verify where
+   *  this IAP appears in the app. Required for submission. Sync replaces
+   *  any existing screenshot when the local file is set. */
+  review_screenshot?: string;
   localisations: Record<string, IAPLocalisation>;
 }
 
@@ -135,6 +139,9 @@ export interface Subscription {
    *  creates anything in YAML but not on ASC, deletes anything on ASC
    *  but not in YAML. */
   intro_offers?: IntroOffer[];
+  /** Local path to a PNG / JPEG that Apple Review uses to verify where
+   *  this subscription is purchased in the app. Required for submission. */
+  review_screenshot?: string;
   localisations: Record<string, IAPLocalisation>;
 }
 
