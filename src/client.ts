@@ -39,6 +39,20 @@ import {
   betaBuildLocalizationsUpdateInstance,
   betaBuildLocalizationsGetCollection,
   betaAppReviewSubmissionsCreateInstance,
+  // IAP / subscription localisation surface
+  inAppPurchasesV2InAppPurchaseLocalizationsGetToManyRelated,
+  inAppPurchaseLocalizationsCreateInstance,
+  inAppPurchaseLocalizationsUpdateInstance,
+  inAppPurchaseLocalizationsDeleteInstance,
+  subscriptionGroupsSubscriptionsGetToManyRelated,
+  subscriptionGroupsSubscriptionGroupLocalizationsGetToManyRelated,
+  subscriptionGroupLocalizationsCreateInstance,
+  subscriptionGroupLocalizationsUpdateInstance,
+  subscriptionGroupLocalizationsDeleteInstance,
+  subscriptionsSubscriptionLocalizationsGetToManyRelated,
+  subscriptionLocalizationsCreateInstance,
+  subscriptionLocalizationsUpdateInstance,
+  subscriptionLocalizationsDeleteInstance,
 } from 'appstore-connect-sdk';
 import type { Client } from 'appstore-connect-sdk';
 import { getAuthContext, type AuthContext } from './auth.js';
@@ -607,6 +621,232 @@ export class AppStoreClient {
   }
 
   // ============================================================================
+  // IAP Localisations
+  // ============================================================================
+  //
+  // Three flavours of localisation live under the IAP/sub family:
+  //   1. In-app purchase localisation       (display_name, description)
+  //   2. Subscription group localisation    (name, custom_app_name)
+  //   3. Subscription localisation          (display_name, description)
+  //
+  // ASC keys each localisation by (parent product, locale). We provide three
+  // primitives — list, upsert (create-or-update), delete — and mirror the
+  // appStoreVersionLocalizations upsert pattern used for app-listings.
+
+  /**
+   * Fetch every localisation attached to an IAP. The `id` here is the
+   * App Store Connect IAP id (NOT the productId string).
+   */
+  async listInAppPurchaseLocalisations(iapId: string): Promise<any[]> {
+    const response = await inAppPurchasesV2InAppPurchaseLocalizationsGetToManyRelated({
+      client: this.client,
+      path: { id: iapId },
+    });
+    return response.data?.data || [];
+  }
+
+  /**
+   * Create-or-update one IAP localisation. We POST when no existing
+   * localisation matches the locale and PATCH otherwise — exactly the
+   * same shape we use for app-listing localisations.
+   *
+   * The update path is conservative: it only sends the fields the caller
+   * passes, so a partial sync (e.g. just description) doesn't clobber
+   * the other field.
+   */
+  async upsertInAppPurchaseLocalisation(
+    iapId: string,
+    locale: string,
+    fields: { name: string; description?: string },
+  ): Promise<string> {
+    const existing = await this.listInAppPurchaseLocalisations(iapId);
+    const match = existing.find((l: any) => l.attributes?.locale === locale);
+
+    if (match) {
+      const resp = await inAppPurchaseLocalizationsUpdateInstance({
+        client: this.client,
+        path: { id: match.id },
+        body: {
+          data: {
+            id: match.id,
+            type: 'inAppPurchaseLocalizations',
+            attributes: fields,
+          },
+        },
+      });
+      throwIfError(resp);
+      return match.id;
+    }
+
+    const resp = await inAppPurchaseLocalizationsCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'inAppPurchaseLocalizations',
+          attributes: { locale, ...fields },
+          relationships: {
+            inAppPurchaseV2: {
+              data: { id: iapId, type: 'inAppPurchases' },
+            },
+          },
+        },
+      },
+    });
+    throwIfError(resp);
+    return resp.data?.data?.id || '';
+  }
+
+  /** Delete one IAP localisation by id. */
+  async deleteInAppPurchaseLocalisation(localisationId: string): Promise<void> {
+    const resp = await inAppPurchaseLocalizationsDeleteInstance({
+      client: this.client,
+      path: { id: localisationId },
+    });
+    throwIfError(resp);
+  }
+
+  // -- Subscription groups ----------------------------------------------------
+
+  /** List every subscription product inside one subscription group. */
+  async listSubscriptionsInGroup(groupId: string): Promise<any[]> {
+    const response = await subscriptionGroupsSubscriptionsGetToManyRelated({
+      client: this.client,
+      path: { id: groupId },
+    });
+    return response.data?.data || [];
+  }
+
+  /** List every localisation on a subscription group. */
+  async listSubscriptionGroupLocalisations(groupId: string): Promise<any[]> {
+    const response = await subscriptionGroupsSubscriptionGroupLocalizationsGetToManyRelated({
+      client: this.client,
+      path: { id: groupId },
+    });
+    return response.data?.data || [];
+  }
+
+  /**
+   * Upsert one subscription-group localisation. Group localisations carry
+   * `name` (the group's user-facing name in that locale) and
+   * `customAppName` (an optional override for the app name shown next to
+   * the group in the subscriptions sheet).
+   */
+  async upsertSubscriptionGroupLocalisation(
+    groupId: string,
+    locale: string,
+    fields: { name: string; customAppName?: string },
+  ): Promise<string> {
+    const existing = await this.listSubscriptionGroupLocalisations(groupId);
+    const match = existing.find((l: any) => l.attributes?.locale === locale);
+
+    if (match) {
+      const resp = await subscriptionGroupLocalizationsUpdateInstance({
+        client: this.client,
+        path: { id: match.id },
+        body: {
+          data: {
+            id: match.id,
+            type: 'subscriptionGroupLocalizations',
+            attributes: fields,
+          },
+        },
+      });
+      throwIfError(resp);
+      return match.id;
+    }
+
+    const resp = await subscriptionGroupLocalizationsCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'subscriptionGroupLocalizations',
+          attributes: { locale, ...fields },
+          relationships: {
+            subscriptionGroup: {
+              data: { id: groupId, type: 'subscriptionGroups' },
+            },
+          },
+        },
+      },
+    });
+    throwIfError(resp);
+    return resp.data?.data?.id || '';
+  }
+
+  async deleteSubscriptionGroupLocalisation(localisationId: string): Promise<void> {
+    const resp = await subscriptionGroupLocalizationsDeleteInstance({
+      client: this.client,
+      path: { id: localisationId },
+    });
+    throwIfError(resp);
+  }
+
+  // -- Subscriptions (inside a group) -----------------------------------------
+
+  /** List every localisation on a single subscription product. */
+  async listSubscriptionLocalisations(subscriptionId: string): Promise<any[]> {
+    const response = await subscriptionsSubscriptionLocalizationsGetToManyRelated({
+      client: this.client,
+      path: { id: subscriptionId },
+    });
+    return response.data?.data || [];
+  }
+
+  /**
+   * Upsert one subscription localisation. Subscription localisations carry
+   * `name` (user-facing product name) and `description`.
+   */
+  async upsertSubscriptionLocalisation(
+    subscriptionId: string,
+    locale: string,
+    fields: { name: string; description?: string },
+  ): Promise<string> {
+    const existing = await this.listSubscriptionLocalisations(subscriptionId);
+    const match = existing.find((l: any) => l.attributes?.locale === locale);
+
+    if (match) {
+      const resp = await subscriptionLocalizationsUpdateInstance({
+        client: this.client,
+        path: { id: match.id },
+        body: {
+          data: {
+            id: match.id,
+            type: 'subscriptionLocalizations',
+            attributes: fields,
+          },
+        },
+      });
+      throwIfError(resp);
+      return match.id;
+    }
+
+    const resp = await subscriptionLocalizationsCreateInstance({
+      client: this.client,
+      body: {
+        data: {
+          type: 'subscriptionLocalizations',
+          attributes: { locale, ...fields },
+          relationships: {
+            subscription: {
+              data: { id: subscriptionId, type: 'subscriptions' },
+            },
+          },
+        },
+      },
+    });
+    throwIfError(resp);
+    return resp.data?.data?.id || '';
+  }
+
+  async deleteSubscriptionLocalisation(localisationId: string): Promise<void> {
+    const resp = await subscriptionLocalizationsDeleteInstance({
+      client: this.client,
+      path: { id: localisationId },
+    });
+    throwIfError(resp);
+  }
+
+  // ============================================================================
   // App Info
   // ============================================================================
 
@@ -838,4 +1078,16 @@ export class AppStoreClient {
  */
 export function createClient(keyName?: string): AppStoreClient {
   return AppStoreClient.create(keyName);
+}
+
+/**
+ * Throw a JS Error from an App Store Connect API response that carries
+ * a non-empty `error` envelope. Used by the IAP/sub localisation upsert
+ * helpers so a caller can wrap one try/catch around the whole sync loop.
+ */
+function throwIfError(response: { error?: any }): void {
+  if (!response.error) return;
+  const errors = (response.error as any).errors || [];
+  const messages = errors.map((e: any) => e.detail || e.title).filter(Boolean).join('; ');
+  throw new Error(`App Store Connect API error: ${messages || JSON.stringify(response.error)}`);
 }
