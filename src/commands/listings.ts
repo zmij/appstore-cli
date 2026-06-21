@@ -34,17 +34,17 @@ export function registerListingsCommands(program: Command): void {
         const { readFileSync, existsSync, readdirSync } = await import('fs');
         const { join, basename } = await import('path');
         const { parse: parseYaml } = await import('yaml');
-        const { getWorktreeRoot } = await import('../auth.js');
+        const { getListingsDir } = await import('../paths.js');
 
         const client = createClient(options.keyId);
 
-        // Find metadata directory (in current worktree)
-        const worktreeRoot = getWorktreeRoot();
-        const metadataDir = join(worktreeRoot, 'l10n', 'metadata', 'apple', 'listings');
+        // Resolve metadata directory (configurable via appstore-cli.config.yaml
+        // or APPSTORE_METADATA_DIR; defaults to l10n/metadata/apple/listings).
+        const metadataDir = getListingsDir();
 
         if (!existsSync(metadataDir)) {
           console.error(chalk.red(`Metadata directory not found: ${metadataDir}`));
-          console.log('Expected YAML files in l10n/metadata/apple/listings/');
+          console.log('Expected YAML files in the configured metadata_dir (default `l10n/metadata/apple/listings/`).');
           process.exit(1);
         }
 
@@ -305,11 +305,10 @@ export function registerListingsCommands(program: Command): void {
         const { readFileSync, existsSync, readdirSync } = await import('fs');
         const { join, basename } = await import('path');
         const { parse: parseYaml } = await import('yaml');
-        const { getWorktreeRoot } = await import('../auth.js');
+        const { getListingsDir } = await import('../paths.js');
 
         const client = createClient(options.keyId);
-        const worktreeRoot = getWorktreeRoot();
-        const metadataDir = join(worktreeRoot, 'l10n', 'metadata', 'apple', 'listings');
+        const metadataDir = getListingsDir();
 
         if (!existsSync(metadataDir)) {
           console.error(chalk.red(`Metadata directory not found: ${metadataDir}`));

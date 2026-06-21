@@ -1,75 +1,36 @@
 /**
  * Authentication module for App Store Connect API
  *
- * Discovers project root via git, loads config from .secret-stuff/,
- * and provides JWT generation for API calls.
+ * Loads config from the configured secrets directory (default
+ * `.secret-stuff/`, override via `appstore-cli.config.yaml` or
+ * `APPSTORE_SECRETS_DIR`) and provides JWT generation for API
+ * calls.
+ *
+ * Path discovery (git roots, config-file lookup) lives in
+ * `./project.ts` and `./paths.ts` to avoid circular imports.
  */
 
-import { execSync } from 'child_process';
 import { readFileSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join } from 'path';
 import { parse as parseYaml } from 'yaml';
 import type { AppStoreConfig, AuthKey } from './types.js';
+import { getSecretsDir as resolveSecretsDir } from './paths.js';
 
-const CONFIG_DIR = '.secret-stuff';
+// Re-export for back-compat — auth.ts was the original public source.
+export { getProjectRoot, getWorktreeRoot } from './project.js';
+
 const CONFIG_FILE = 'appstore-config.yaml';
 
 /**
- * Get the current worktree root directory.
- * This is where metadata files are located.
- */
-export function getWorktreeRoot(): string {
-  try {
-    return execSync('git rev-parse --show-toplevel', {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-  } catch (error) {
-    throw new Error(
-      'Failed to determine worktree root. Make sure you are in a git repository.'
-    );
-  }
-}
-
-/**
- * Discover the main project root directory using git.
- * Handles worktrees by finding the main repository root.
- * This is where secrets are stored.
- */
-export function getProjectRoot(): string {
-  try {
-    // First, check if we're in a worktree by getting the common git dir
-    const gitCommonDir = execSync('git rev-parse --git-common-dir', {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }).trim();
-
-    // If git-common-dir is just ".git", we're in the main repo
-    // Otherwise, it's a path to the main repo's .git directory
-    if (gitCommonDir === '.git') {
-      // We're in the main repo
-      return execSync('git rev-parse --show-toplevel', {
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-      }).trim();
-    }
-
-    // We're in a worktree - resolve to main repo root
-    // gitCommonDir is typically /path/to/main/repo/.git
-    return dirname(gitCommonDir);
-  } catch (error) {
-    throw new Error(
-      'Failed to determine project root. Make sure you are in a git repository.'
-    );
-  }
-}
-
-/**
- * Get the path to the secrets directory
+ * Get the path to the secrets directory.
+ *
+ * Re-exported from paths.ts. Configurable via
+ * `appstore-cli.config.yaml` (`secrets_dir: ...`) at the project
+ * root, or the `APPSTORE_SECRETS_DIR` env var. Default
+ * `.secret-stuff/` at the project root.
  */
 export function getSecretsDir(): string {
-  const root = getProjectRoot();
-  return join(root, CONFIG_DIR);
+  return resolveSecretsDir();
 }
 
 /**

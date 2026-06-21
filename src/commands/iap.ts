@@ -72,16 +72,14 @@ export function registerIAPCommands(program: Command): void {
     .action(async (options) => {
       try {
         const { readFileSync, existsSync } = await import('fs');
-        const { join } = await import('path');
         const { parse: parseYaml } = await import('yaml');
-        const { getWorktreeRoot } = await import('../auth.js');
+        const { getIapYamlPath } = await import('../paths.js');
 
-        const worktreeRoot = getWorktreeRoot();
-        const iapPath = join(worktreeRoot, 'l10n', 'metadata', 'apple', 'iap.yaml');
+        const iapPath = getIapYamlPath();
 
         if (!existsSync(iapPath)) {
           console.error(chalk.red(`IAP metadata file not found: ${iapPath}`));
-          console.log('Expected YAML file at l10n/metadata/apple/iap.yaml');
+          console.log('Expected YAML at the configured metadata_dir (default `l10n/metadata/apple/iap.yaml`).');
           process.exit(1);
         }
 
@@ -509,12 +507,10 @@ export function registerIAPCommands(program: Command): void {
     .action(async (options) => {
       try {
         const { readFileSync, writeFileSync, existsSync } = await import('fs');
-        const { join } = await import('path');
         const { parseDocument } = await import('yaml');
-        const { getWorktreeRoot } = await import('../auth.js');
+        const { getIapYamlPath } = await import('../paths.js');
 
-        const worktreeRoot = getWorktreeRoot();
-        const iapPath = join(worktreeRoot, 'l10n', 'metadata', 'apple', 'iap.yaml');
+        const iapPath = getIapYamlPath();
         if (!existsSync(iapPath)) {
           console.error(chalk.red(`IAP metadata file not found: ${iapPath}`));
           console.error(chalk.yellow(`First-time setup? Run \`appstore iap export --output ${iapPath}\` to seed it.`));
@@ -554,12 +550,10 @@ export function registerIAPCommands(program: Command): void {
     .action(async (options) => {
       try {
         const { readFileSync, existsSync } = await import('fs');
-        const { join } = await import('path');
         const { parse: parseYaml } = await import('yaml');
-        const { getWorktreeRoot } = await import('../auth.js');
+        const { getIapYamlPath } = await import('../paths.js');
 
-        const worktreeRoot = getWorktreeRoot();
-        const iapPath = join(worktreeRoot, 'l10n', 'metadata', 'apple', 'iap.yaml');
+        const iapPath = getIapYamlPath();
         if (!existsSync(iapPath)) {
           console.error(chalk.red(`IAP metadata file not found: ${iapPath}`));
           process.exit(1);
@@ -727,12 +721,10 @@ export function registerIAPCommands(program: Command): void {
     .action(async (options) => {
       try {
         const { readFileSync, existsSync } = await import('fs');
-        const { join } = await import('path');
         const { parse: parseYaml } = await import('yaml');
-        const { getWorktreeRoot } = await import('../auth.js');
+        const { getIapYamlPath } = await import('../paths.js');
 
-        const worktreeRoot = getWorktreeRoot();
-        const iapPath = join(worktreeRoot, 'l10n', 'metadata', 'apple', 'iap.yaml');
+        const iapPath = getIapYamlPath();
         if (!existsSync(iapPath)) {
           console.error(chalk.red(`IAP metadata file not found: ${iapPath}`));
           process.exit(1);

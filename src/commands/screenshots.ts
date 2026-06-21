@@ -238,7 +238,7 @@ export function registerScreenshotsCommands(program: Command): void {
         const { join, basename } = await import('path');
         const { parse: parseYaml } = await import('yaml');
         const { createHash } = await import('crypto');
-        const { getWorktreeRoot } = await import('../auth.js');
+        const { getScreenshotsOrderPath } = await import('../paths.js');
 
         const mode = options.mode as ScreenshotUploadMode;
 
@@ -324,9 +324,10 @@ export function registerScreenshotsCommands(program: Command): void {
           process.exit(1);
         }
 
-        // Load order configuration if exists
-        const worktreeRoot = getWorktreeRoot();
-        const orderPath = join(worktreeRoot, 'l10n', 'metadata', 'apple', 'screenshots', 'order.yaml');
+        // Load order configuration if exists (configurable via
+        // appstore-cli.config.yaml or APPSTORE_METADATA_DIR; defaults
+        // to l10n/metadata/apple/screenshots/order.yaml).
+        const orderPath = getScreenshotsOrderPath();
         let order: string[] = [];
         if (existsSync(orderPath)) {
           const orderContent = readFileSync(orderPath, 'utf-8');
@@ -581,15 +582,13 @@ export function registerScreenshotsCommands(program: Command): void {
     .action(async (options) => {
       try {
         const { existsSync, readFileSync } = await import('fs');
-        const { join } = await import('path');
         const { parse: parseYaml } = await import('yaml');
-        const { getWorktreeRoot } = await import('../auth.js');
+        const { getScreenshotsOrderPath } = await import('../paths.js');
 
         const client = createClient(options.keyId);
 
-        // Load order configuration
-        const worktreeRoot = getWorktreeRoot();
-        const orderPath = join(worktreeRoot, 'l10n', 'metadata', 'apple', 'screenshots', 'order.yaml');
+        // Load order configuration from the configured metadata_dir.
+        const orderPath = getScreenshotsOrderPath();
 
         if (!existsSync(orderPath)) {
           console.error(chalk.red(`Order configuration not found: ${orderPath}`));
