@@ -4,7 +4,7 @@
 
 Two binaries from one `npm install`: `appstore` (CLI, commander.js) and `appstore-mcp` (Model Context Protocol server, stdio). Both wrap the same client code over Apple's official App Store Connect SDK.
 
-Battle-tested on [Lazy Sudoku](https://lazy-sudoku.com) — 14-locale store listing, 12 IAP products across 173 territories of pricing, subscription groups with intro offers, all reconciled via YAML round-trip.
+Battle-tested on [Lazy Sudoku](https://lazy-sudoku.online) — 14-locale store listing, 12 IAP products across 173 territories of pricing, subscription groups with intro offers, all reconciled via YAML round-trip.
 
 ## Docs
 

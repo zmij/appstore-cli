@@ -308,9 +308,9 @@ For human contributors: PRs welcome. Run `npx tsc --noEmit` to typecheck. There 
 
 ## Adopters
 
-> I built this to manage [Lazy Sudoku](https://lazy-sudoku.com)'s App Store listing — 14 locales, 12 IAP products across 173 territories of pricing, plus subscription groups with intro offers. Editing YAML in my editor and running `appstore listings sync` / `appstore iap sync` is dramatically less error-prone than clicking through App Store Connect's per-locale tabs, and lets every store change land via normal PR review.
+> I built this to manage [Lazy Sudoku](https://lazy-sudoku.online)'s App Store listing — 14 locales, 12 IAP products across 173 territories of pricing, plus subscription groups with intro offers. Editing YAML in my editor and running `appstore listings sync` / `appstore iap sync` is dramatically less error-prone than clicking through App Store Connect's per-locale tabs, and lets every store change land via normal PR review.
 >
-> — *Sergei Fedorov, [Lazy Sudoku](https://lazy-sudoku.com)*
+> — *Sergei Fedorov, [Lazy Sudoku](https://lazy-sudoku.online)*
 
 Using appstore-cli somewhere? Open a PR adding yourself to this section.
 

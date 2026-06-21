@@ -41,7 +41,7 @@ export default defineConfig({
         ],
       },
       { text: 'GitHub', link: 'https://github.com/zmij/appstore-cli' },
-      { text: 'Lazy Sudoku', link: 'https://lazy-sudoku.com' },
+      { text: 'Lazy Sudoku', link: 'https://lazy-sudoku.online' },
     ],
 
     sidebar: [
@@ -82,7 +82,7 @@ export default defineConfig({
 
     footer: {
       message:
-        'Released under the MIT Licence. Battle-tested on <a href="https://lazy-sudoku.com">Lazy Sudoku</a>.',
+        'Released under the MIT Licence. Battle-tested on <a href="https://lazy-sudoku.online">Lazy Sudoku</a>.',
       copyright: 'Copyright © 2025 Sergei Fedorov',
     },
   },

@@ -53,8 +53,8 @@ Then see [Get started](/getting-started) for the first-run walkthrough.
 
 ## In production
 
-> I built this to manage [Lazy Sudoku](https://lazy-sudoku.com)'s App Store listing — 14 locales, 12 IAP products across 173 territories of pricing, plus subscription groups with intro offers. Editing YAML in my editor and running `appstore listings sync` / `appstore iap sync` is dramatically less error-prone than clicking through App Store Connect's per-locale tabs, and lets every store change land via normal PR review.
+> I built this to manage [Lazy Sudoku](https://lazy-sudoku.online)'s App Store listing — 14 locales, 12 IAP products across 173 territories of pricing, plus subscription groups with intro offers. Editing YAML in my editor and running `appstore listings sync` / `appstore iap sync` is dramatically less error-prone than clicking through App Store Connect's per-locale tabs, and lets every store change land via normal PR review.
 >
-> — *Sergei Fedorov, [Lazy Sudoku](https://lazy-sudoku.com)*
+> — *Sergei Fedorov, [Lazy Sudoku](https://lazy-sudoku.online)*
 
 Using appstore-cli somewhere? [Open a PR](https://github.com/zmij/appstore-cli/blob/master/README.md) adding yourself to the Adopters section in the README.
