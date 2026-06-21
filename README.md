@@ -316,7 +316,7 @@ For human contributors: PRs welcome. Run `npx tsc --noEmit` to typecheck. There 
 >
 > — *Sergei Fedorov, [Lazy Sudoku](https://lazy-sudoku.online)*
 
-Using appstore-cli somewhere? Open a PR adding yourself to this section.
+Using appstore-flow somewhere? Open a PR adding yourself to this section.
 
 ## Licence
 
