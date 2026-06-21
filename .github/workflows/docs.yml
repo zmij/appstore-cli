@@ -49,6 +49,12 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./docs/.vitepress/dist
           publish_branch: gh-pages
+          # Every deploy writes a single orphan commit, replacing the entire
+          # gh-pages history. Without this the branch grows forever
+          # (built dist tree appended on every push). Master is never
+          # touched either way — gh-pages is a sibling branch, not a
+          # descendant of master.
+          force_orphan: true
           user_name: 'github-actions[bot]'
           user_email: 'github-actions[bot]@users.noreply.github.com'
           commit_message: 'docs: deploy from ${{ github.sha }}'
