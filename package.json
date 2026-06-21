@@ -22,10 +22,21 @@
     "ios",
     "apple",
     "metadata",
-    "screenshots"
+    "screenshots",
+    "iap",
+    "subscriptions",
+    "mcp"
   ],
-  "author": "",
+  "author": "Sergei Fedorov",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zmij/appstore-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zmij/appstore-cli/issues"
+  },
+  "homepage": "https://github.com/zmij/appstore-cli#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "appstore-connect-sdk": "^2.0.0",
