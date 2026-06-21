@@ -1,10 +1,11 @@
 {
   "name": "appstore-cli",
   "version": "1.0.0",
-  "description": "CLI tool for managing App Store Connect metadata, screenshots, and in-app purchases",
+  "description": "CLI + MCP server for managing App Store Connect metadata, screenshots, and in-app purchases",
   "type": "module",
   "bin": {
-    "appstore": "./build/index.js"
+    "appstore": "./build/index.js",
+    "appstore-mcp": "./build/mcp/server.js"
   },
   "files": [
     "build"
@@ -26,11 +27,12 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "appstore-connect-sdk": "^2.0.0",
-    "commander": "^12.0.0",
-    "yaml": "^2.3.0",
     "chalk": "^5.3.0",
-    "glob": "^10.0.0"
+    "commander": "^12.0.0",
+    "glob": "^10.0.0",
+    "yaml": "^2.3.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
