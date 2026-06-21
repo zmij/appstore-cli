@@ -104,9 +104,9 @@ Keep them in sync with the code. When you change a schema, update the doc in the
 
 ## When extracted to its own repo
 
-The extraction is a `git filter-branch --subdirectory-filter appstore-cli` (or `git subtree split`). The package is self-contained:
+The extraction is a `git filter-branch --subdirectory-filter tools/appstore-cli` (or `git subtree split`). The package is self-contained:
 
-- No imports from outside `appstore-cli/`.
+- No imports from outside `tools/appstore-cli/`.
 - Auth + paths configurable via files in any git repo.
 - README + this CLAUDE.md travel with it.
 - The bundled MCP makes the package useful as a standalone tool from day one — no separate "MCP package" needed.
