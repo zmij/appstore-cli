@@ -1,214 +1,231 @@
-# App Store Connect CLI
+# appstore-cli
 
-Command-line tool for managing App Store Connect metadata, screenshots, and in-app purchases for Lazy Sudoku.
+A CLI + bundled MCP server for managing **App Store Connect** metadata, screenshots, and in-app purchases from YAML files. Designed for teams that want their store listing under version control instead of click-driven through the App Store Connect website.
 
-## Installation
+What it does:
+
+- Pull every per-locale listing, IAP, subscription, custom-product-page, and screenshot summary into committed YAML.
+- Push YAML edits back to ASC: localised copy, prices, availability, subscription intro offers, review screenshots.
+- Create new IAPs and subscriptions from YAML.
+- Two-way reconcile: pull live state into committed YAML without overwriting hand-edits; field-level diff with paths like `subscriptions/my_sub/intro_offers/FREE_TRIAL+ONE_WEEK+1+__global/start_date`.
+- Migrate existing subscribers when a price changes.
+
+Same code is exposed as an [MCP server](#mcp-server) so an agent can read/list/update store state without shelling out.
+
+> Originally extracted from a working Lazy Sudoku setup. Defaults match that layout (`.secret-stuff/` + `l10n/metadata/apple/`); downstream projects can either adopt the same conventions (no config needed) or override via `appstore-cli.config.yaml` / env vars — see [Configuration](#configuration).
+
+## Install
 
 ```bash
-cd appstore-cli
-npm install
-npm run build
+npm install -g appstore-cli
+# or, from a checkout
+cd appstore-cli && npm install && npm run build && npm link
 ```
 
 ## Authentication
 
-The CLI uses API keys stored in `{project_root}/.secret-stuff/appstore-config.yaml`:
+You need an [App Store Connect API key](https://appstoreconnect.apple.com/access/api). The `.p8` file plus the issuer ID + app ID go in a config file:
 
 ```yaml
-issuer_id: "your-issuer-id"
-app_id: "your-app-id"
+# .secret-stuff/appstore-config.yaml (gitignored — never commit)
+issuer_id: "8a8a8a8a-1234-5678-9abc-def012345678"
+app_id: "1234567890"
 
 keys:
-  build_upload:
-    key_id: "YOUR_KEY_ID"
-    key_file: "AuthKey_YOUR_KEY_ID.p8"
   app_manager:
-    key_id: "ANOTHER_KEY_ID"
-    key_file: "AuthKey_ANOTHER_KEY_ID.p8"
+    key_id: "ABCDE12345"
+    key_file: "AuthKey_ABCDE12345.p8"
+  build_upload:
+    key_id: "FGHIJ67890"
+    key_file: "AuthKey_FGHIJ67890.p8"
 
-default_key: "build_upload"
+default_key: "app_manager"
 ```
 
-The CLI automatically discovers the project root via git, even when running from a worktree.
+Multiple keys let you separate concerns (one for build uploads, one for metadata edits). Pick a non-default key per call with `--key-id`.
 
-## Usage
+See [docs/auth.md](docs/auth.md) for key creation and the JWT lifecycle.
+
+## Configuration
+
+The defaults match the layout this tool was extracted from:
+
+| What | Default | Where |
+|---|---|---|
+| Secrets directory | `.secret-stuff/` at project root | Holds `appstore-config.yaml` + `.p8` files |
+| Metadata directory | `l10n/metadata/apple/` at worktree root | Holds `listings/<lang>.yaml`, `iap.yaml`, `screenshots/order.yaml` |
+
+To override, drop an `appstore-cli.config.yaml` at the worktree root (preferred) or project root:
+
+```yaml
+# appstore-cli.config.yaml
+secrets_dir:  config/appstore-secrets     # relative to project root
+metadata_dir: store-metadata/apple        # relative to worktree root
+```
+
+Env vars win over the file:
 
 ```bash
-# Run directly
-node build/index.js <command>
-
-# Or install globally
-npm link
-appstore <command>
+APPSTORE_SECRETS_DIR=/path/to/secrets
+APPSTORE_METADATA_DIR=/path/to/metadata
 ```
+
+The CLI uses git to find the project root (so secrets live with the main repo, not in worktrees) and the worktree root (so per-branch metadata edits stay local).
+
+## Quickstart
+
+```bash
+# 1. Pull current ASC state into YAML
+appstore iap export --output l10n/metadata/apple/iap.yaml
+
+# 2. Edit the YAML in your editor
+$EDITOR l10n/metadata/apple/iap.yaml
+
+# 3. Preview the push
+appstore iap sync --dry-run
+
+# 4. Push
+appstore iap sync
+```
+
+Same flow for listings:
+
+```bash
+appstore listings update --all --dry-run
+appstore listings update --all
+```
+
+See [docs/workflow.md](docs/workflow.md) for the full export → edit → sync → pull loop.
 
 ## Commands
 
-### Authentication
+### App + version info
 
 ```bash
-# Validate authentication configuration
-appstore auth
-
-# Find app ID by bundle ID (for initial setup)
-appstore setup --bundle-id online.lazy-sudoku.app \
-  --issuer-id YOUR_ISSUER_ID \
-  --key-id YOUR_KEY_ID \
-  --key-file path/to/AuthKey.p8
+appstore info                                       # bundle ID, name, SKU, primary locale
+appstore versions list                              # all app versions
 ```
 
-### Read Operations
+### Listings
 
 ```bash
-# List app versions (shows platform: iOS/macOS)
-appstore versions list
-
-# List localisations for the editable version
-appstore localisations list
-
-# List localisations for a specific version
-appstore localisations list --version-id <id>
-
-# Show listing for a specific locale
-appstore listings show --lang en-US
-
-# Export current state to YAML files
-appstore export --output ./backup/
+appstore listings list --version-id X
+appstore listings show --lang en-GB
+appstore listings update --all [--dry-run]
+appstore listings update --lang en-GB --field whats_new
+appstore listings diff                              # YAML vs live
 ```
 
-### In-App Purchases & Subscriptions
+### In-App Purchases + subscriptions
 
 ```bash
-# List in-app purchases
-appstore iap list
-
-# List subscription groups
-appstore subscriptions list
+appstore iap list                                              # quick stats
+appstore iap show <productId>                                  # full detail
+appstore iap export --output l10n/metadata/apple/iap.yaml      # overwrites file
+appstore iap sync [--product-id X] [--dry-run]                 # YAML → ASC
+appstore iap create [--product-id X] [--dry-run]               # provision new
+appstore iap pull [--product-id X] [--dry-run]                 # ASC → YAML (additive)
+appstore iap diff [--product-id X]                             # field-level divergence
+appstore iap migrate-prices --product-id X [--territory T] [--confirm]
 ```
 
-### Custom Product Pages
-
-```bash
-# List custom product pages
-appstore pages list
-```
-
-### Update Operations
-
-```bash
-# Update all localisations from YAML files
-appstore listings update --all
-
-# Update specific language
-appstore listings update --lang en-US
-
-# Update specific field only
-appstore listings update --lang en-US --field whats_new
-
-# Dry-run (show what would change)
-appstore listings update --all --dry-run
-```
+Subscriptions, subscription groups, intro offers, review screenshots all round-trip through `iap.yaml`. See [docs/iap-schema.md](docs/iap-schema.md) for the YAML schema.
 
 ### Screenshots
 
 ```bash
-# List screenshots for a language
-appstore screenshots list --lang en-US
-
-# Upload screenshots (replace mode)
-appstore screenshots upload --source ~/screenshots --lang en-US --mode replace
-
-# Upload to all languages
-appstore screenshots upload --source ~/screenshots --all --mode replace
+appstore screenshots list --lang en-GB
+appstore screenshots upload --source ./shots --lang en-GB --mode replace
+appstore screenshots upload --source ./shots --all --mode replace
+appstore screenshots reorder --all
 ```
 
-## MCP Integration
+Modes: `replace` (drop + re-upload), `add` (append), `reorder` (no upload, reorder existing).
 
-The App Store tools are also available via MCP in the `sudoku-mcp` server:
+### Custom Product Pages
+
+```bash
+appstore pages list
+```
+
+### App Previews (video)
+
+```bash
+appstore previews list --lang en-GB
+appstore previews upload --source ./reels --lang en-GB
+```
+
+## MCP Server
+
+The package ships a bundled MCP server using the same client code as the CLI:
+
+```bash
+claude mcp add appstore appstore-mcp
+```
+
+Tools exposed:
 
 | Tool | Description |
-|------|-------------|
-| `appstore_list_versions` | List versions with platform info |
-| `appstore_list_localisations` | List localisations for a version |
-| `appstore_show_listing` | Show listing for a locale |
-| `appstore_update_listing` | Update listing fields |
-| `appstore_list_iap` | List in-app purchases |
-| `appstore_list_subscriptions` | List subscription groups |
-| `appstore_list_pages` | List custom product pages |
-| `appstore_get_app_info` | Get app bundle ID, name, SKU |
+|---|---|
+| `appstore_get_app_info` | Bundle ID, name, SKU, primary locale, relationships |
+| `appstore_list_versions` | All app versions |
+| `appstore_list_localisations` | Per-locale metadata (with `locales` filter + `summary` + `truncateLength`) |
+| `appstore_show_listing` | One locale on the editable version |
+| `appstore_update_listing` | Patch one locale's fields (only supplied fields touched) |
+| `appstore_list_iap` | All in-app purchases |
+| `appstore_list_subscriptions` | All subscription groups |
+| `appstore_list_pages` | All custom product pages |
+| `appstore_screenshot_summary` | Per-locale × per-device screenshot counts |
 
-## Metadata Format
+Auth + paths come from the same config files as the CLI; no separate setup.
 
-Listings are stored in YAML format in `l10n/metadata/apple/listings/`:
+## Key selection
 
-```yaml
-# listings/en.yaml
-whats_new: |
-  New in this version:
-  • Feature 1
-  • Feature 2
+Priority order:
 
-app_info:
-  title: "Lazy Sudoku"
-  subtitle: "Solve Smarter, Not Harder"
-  promotional_text: "Advanced sudoku..."
-  description: |
-    Full app description here...
-  keywords: "sudoku,puzzle,brain,logic"
-```
-
-IAP and subscriptions in `l10n/metadata/apple/iap.yaml`:
-
-```yaml
-purchases:
-  premium_lifetime:
-    reference_name: "Premium - Lifetime"
-    localisations:
-      en:
-        display_name: "Premium - Lifetime"
-        description: "All features unlocked!"
-
-subscriptions:
-  premium_monthly:
-    reference_name: "Premium - Monthly"
-    localisations:
-      en:
-        display_name: "Premium - Monthly"
-        description: "Access all features for one month."
-```
-
-## Key Selection
-
-Keys are selected in this priority order:
-
-1. `--key-id` CLI flag
-2. `APPSTORE_KEY_ID` environment variable
-3. `default_key` from config file
+1. `--key-id <name>` flag
+2. `APPSTORE_KEY_ID` env var
+3. `default_key` from the config file
 
 ```bash
 # Use a specific key
-appstore versions list --key-id app_manager
+appstore versions list --key-id build_upload
 ```
 
-## Language Codes
+## Apple quirks worth knowing
 
-The CLI uses App Store Connect locale codes:
+The Apple side has several non-obvious gotchas the CLI works around. Captured in [docs/quirks.md](docs/quirks.md):
 
-| Our Code | App Store Locale |
-|----------|------------------|
-| en | en-US |
-| de | de-DE |
-| fr | fr-FR |
-| es | es-ES |
-| ar | ar-SA |
-| ja | ja |
-| ko | ko |
-| ru | ru |
-| zh | zh-Hans |
+- **Edit sessions are listings-only.** IAPs and subscriptions skip the session.
+- **`preserveCurrentPrice` is the migration discriminator.** `iap sync` writes `true` (new subscribers only); `iap migrate-prices` writes `false` (existing too).
+- **Subscription price points are per-territory.** No "auto-equalise everywhere" call — the anchor migration only affects the anchor's territory.
+- **Apple chooses the consent flow from the price delta.** Decreases auto-apply; increases trigger Apple's notification + opt-in flow.
+- **`subscriptionPrices.create` requires picking a tier price point ID** — you can't pass a free-form `$4.99`. The CLI finds the matching tier for you.
 
-## Dependencies
+## Project layout
 
-- `appstore-connect-sdk` - App Store Connect API client
-- `commander` - CLI framework
-- `yaml` - YAML parsing
-- `chalk` - Terminal styling
+```
+appstore-cli/
+├── src/
+│   ├── auth.ts             # config loading + JWT
+│   ├── client.ts           # SDK wrapper (read + write methods)
+│   ├── paths.ts            # secrets + metadata path resolution
+│   ├── project.ts          # git-root discovery
+│   ├── types.ts            # YAML schema types
+│   ├── index.ts            # CLI entry (commander)
+│   ├── commands/           # one file per command group
+│   └── mcp/server.ts       # MCP server (stdio)
+├── docs/                   # auth / workflow / iap-schema / listings-schema / quirks
+├── package.json            # bin: appstore + appstore-mcp
+└── README.md               # this file
+```
+
+## Contributing
+
+See [CLAUDE.md](CLAUDE.md) for agent-facing development notes.
+
+For human contributors: PRs welcome. Run `npx tsc --noEmit` to typecheck. There are no unit tests yet — verify against a real ASC account via `--dry-run` flags first.
+
+## Licence
+
+MIT.
