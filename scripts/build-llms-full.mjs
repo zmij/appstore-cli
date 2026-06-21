@@ -18,7 +18,7 @@ const SITE = 'https://zmij.github.io/appstore-cli';
 
 // Page order matches the VitePress sidebar in docs/.vitepress/config.ts.
 const PAGES = [
-  { file: 'index.md', title: 'What is appstore-cli?', slug: '/' },
+  { file: 'index.md', title: 'What is appstore-flow?', slug: '/' },
   { file: 'getting-started.md', title: 'Get started', slug: '/getting-started' },
   { file: 'auth.md', title: 'Authentication', slug: '/auth' },
   { file: 'workflow.md', title: 'Workflow', slug: '/workflow' },
@@ -35,10 +35,12 @@ function stripFrontmatter(source) {
 }
 
 const header = [
-  '# appstore-cli — full documentation',
+  '# appstore-flow — full documentation',
   '',
-  'Single-file concatenation of every page on the appstore-cli docs site,',
+  'Single-file concatenation of every page on the appstore-flow docs site,',
   `for one-shot LLM ingestion. Live site: ${SITE}/`,
+  '',
+  'Install: npm install -g appstore-flow (GitHub repo lives at zmij/appstore-cli).',
   '',
   'Page index:',
   ...PAGES.map((p) => `- ${p.title} — ${SITE}${p.slug === '/' ? '/' : p.slug}`),

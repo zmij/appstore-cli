@@ -2,7 +2,7 @@
 layout: home
 
 hero:
-  name: appstore-cli
+  name: appstore-flow
   text: App Store Connect from your terminal
   tagline: Manage iOS listings, IAPs, subscriptions, and screenshots from YAML files. CLI + bundled MCP server.
   actions:
@@ -28,7 +28,7 @@ features:
     details: Migrate existing subscribers when a price changes via Apple's `batchMigratePrices`. Dry-run by default; `--confirm` to fire.
   - icon: ⚡
     title: One install, two binaries
-    details: Single `npm install`, two binaries (`appstore` + `appstore-mcp`). Configurable for any iOS project via env vars or `appstore-cli.config.yaml`.
+    details: Single `npm install`, two binaries (`appstore` + `appstore-mcp`). Configurable for any iOS project via env vars or `appstore-cli.config.yaml` (legacy config-file name from before the npm rebrand).
   - icon: 🌍
     title: Locale-aware
     details: Built and battle-tested on Lazy Sudoku's 14-locale listing and 173-territory pricing matrix.
@@ -36,15 +36,16 @@ features:
 
 ## What it does
 
-`appstore-cli` puts your iOS store presence under version control. Instead of clicking through App Store Connect's per-locale tabs to update copy, prices, or screenshots, you pull live state into committed YAML, edit it in your editor, and sync it back through normal PR review.
+`appstore-flow` puts your iOS store presence under version control. Instead of clicking through App Store Connect's per-locale tabs to update copy, prices, or screenshots, you pull live state into committed YAML, edit it in your editor, and sync it back through normal PR review.
 
 The bundled `appstore-mcp` server exposes the same client code over stdio so any MCP-aware agent — Claude Code, Cursor, Windsurf, Cline, Continue, Zed — can read and update live store state without shelling out.
 
 ## Quick install
 
 ```bash
-npm install -g appstore-cli
-# or, from a checkout
+npm install -g appstore-flow
+# or, from a checkout (the GitHub repo is still `appstore-cli` —
+# only the npm package name has been rebranded to `appstore-flow`):
 git clone https://github.com/zmij/appstore-cli.git
 cd appstore-cli && npm install && npm run build && npm link
 ```
@@ -57,4 +58,4 @@ Then see [Get started](/getting-started) for the first-run walkthrough.
 >
 > — *Sergei Fedorov, [Lazy Sudoku](https://lazy-sudoku.online)*
 
-Using appstore-cli somewhere? [Open a PR](https://github.com/zmij/appstore-cli/blob/master/README.md) adding yourself to the Adopters section in the README.
+Using appstore-flow somewhere? [Open a PR](https://github.com/zmij/appstore-cli/blob/master/README.md) adding yourself to the Adopters section in the README.

@@ -2,9 +2,9 @@ import { defineConfig } from 'vitepress';
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
-  title: 'appstore-cli',
+  title: 'appstore-flow',
   description:
-    'CLI + bundled MCP server for managing App Store Connect metadata, IAPs, subscriptions, and screenshots from YAML files.',
+    'App Store Connect from your terminal — manage iOS listings, IAPs, subscriptions, and screenshots from YAML files. CLI + bundled MCP server.',
 
   // The site deploys at https://zmij.github.io/appstore-cli/ — every
   // generated link is prefixed by `base`. Switching to a custom domain
@@ -17,7 +17,7 @@ export default defineConfig({
   head: [
     ['link', { rel: 'icon', href: '/appstore-cli/favicon.svg', type: 'image/svg+xml' }],
     ['meta', { name: 'theme-color', content: '#0a84ff' }],
-    ['meta', { property: 'og:title', content: 'appstore-cli' }],
+    ['meta', { property: 'og:title', content: 'appstore-flow' }],
     ['meta', { property: 'og:type', content: 'website' }],
     [
       'meta',
@@ -48,7 +48,7 @@ export default defineConfig({
       {
         text: 'Introduction',
         items: [
-          { text: 'What is appstore-cli?', link: '/' },
+          { text: 'What is appstore-flow?', link: '/' },
           { text: 'Get started', link: '/getting-started' },
         ],
       },
