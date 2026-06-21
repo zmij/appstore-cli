@@ -156,7 +156,7 @@ appstore screenshots upload --source ./shots/en-GB --lang en-GB --mode replace
 appstore screenshots upload --source ./shots --all --mode replace
 ```
 
-`./shots/<lang>/` should contain files named per Apple's device-class conventions — see [screenshots-schema.md](screenshots-schema.md) (TODO) for the naming pattern.
+`./shots/<lang>/` should contain files named per Apple's device-class conventions — a dedicated screenshots-schema doc is TODO; for now see the source in `src/commands/screenshots.ts` for the device-class naming pattern.
 
 ## App Previews (video)
 
