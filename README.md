@@ -2,6 +2,8 @@
 
 A CLI + bundled MCP server for managing **App Store Connect** metadata, screenshots, and in-app purchases from YAML files. Designed for teams that want their store listing under version control instead of click-driven through the App Store Connect website.
 
+📖 **Documentation: <https://zmij.github.io/appstore-cli/>** (`llms.txt` available for agents at [`/llms.txt`](https://zmij.github.io/appstore-cli/llms.txt))
+
 What it does:
 
 - Pull every per-locale listing, IAP, subscription, custom-product-page, and screenshot summary into committed YAML.
