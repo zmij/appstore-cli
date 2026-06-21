@@ -5,7 +5,7 @@ A 5-minute walkthrough from zero to your first round-tripped App Store listing.
 ## 1. Install
 
 ```bash
-npm install -g appstore-cli
+npm install -g appstore-flow
 ```
 
 Two binaries land on your `PATH`:

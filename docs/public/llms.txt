@@ -1,8 +1,8 @@
-# appstore-cli
+# appstore-flow
 
 > CLI + bundled MCP server for managing iOS App Store Connect metadata, in-app purchases, subscriptions, and screenshots from YAML files. Designed for teams that want their store listing under version control instead of click-driven through the App Store Connect website.
 
-Two binaries from one `npm install`: `appstore` (CLI, commander.js) and `appstore-mcp` (Model Context Protocol server, stdio). Both wrap the same client code over Apple's official App Store Connect SDK.
+Install: `npm install -g appstore-flow`. Two binaries land on `$PATH`: `appstore` (CLI, commander.js) and `appstore-mcp` (Model Context Protocol server, stdio). Both wrap the same client code over Apple's official App Store Connect SDK. The GitHub repo is `zmij/appstore-cli` (legacy slug from before the npm rebrand to `appstore-flow`).
 
 Battle-tested on [Lazy Sudoku](https://lazy-sudoku.online) — 14-locale store listing, 12 IAP products across 173 territories of pricing, subscription groups with intro offers, all reconciled via YAML round-trip.
 

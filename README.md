@@ -1,8 +1,10 @@
-# appstore-cli
+# appstore-flow
 
 A CLI + bundled MCP server for managing **App Store Connect** metadata, screenshots, and in-app purchases from YAML files. Designed for teams that want their store listing under version control instead of click-driven through the App Store Connect website.
 
 📖 **Documentation: <https://zmij.github.io/appstore-cli/>** (`llms.txt` available for agents at [`/llms.txt`](https://zmij.github.io/appstore-cli/llms.txt))
+
+> **Naming note.** The npm package is **`appstore-flow`**. The GitHub repo is `zmij/appstore-cli` and the docs site lives at `zmij.github.io/appstore-cli/` — slugs kept from before the rebrand so existing links keep working. The local config filename `appstore-cli.config.yaml` is also a legacy holdover.
 
 What it does:
 
@@ -19,8 +21,10 @@ Same code is exposed as an [MCP server](#mcp-server) so an agent can read/list/u
 ## Install
 
 ```bash
-npm install -g appstore-cli
-# or, from a checkout
+npm install -g appstore-flow
+# or, from a checkout (the GitHub repo is still `appstore-cli` — only the
+# npm package name has been rebranded to `appstore-flow`):
+git clone https://github.com/zmij/appstore-cli.git
 cd appstore-cli && npm install && npm run build && npm link
 ```
 
@@ -163,7 +167,7 @@ The package ships a bundled MCP server (`appstore-mcp`) using the same client co
 
 ### Prerequisites
 
-`appstore-mcp` must be on `$PATH`. The [Install](#install) step puts it there (either `npm install -g appstore-cli` or `npm link` from a checkout). Verify:
+`appstore-mcp` must be on `$PATH`. The [Install](#install) step puts it there (either `npm install -g appstore-flow` or `npm link` from a checkout). Verify:
 
 ```bash
 which appstore-mcp
@@ -312,7 +316,7 @@ For human contributors: PRs welcome. Run `npx tsc --noEmit` to typecheck. There 
 >
 > — *Sergei Fedorov, [Lazy Sudoku](https://lazy-sudoku.online)*
 
-Using appstore-cli somewhere? Open a PR adding yourself to this section.
+Using appstore-flow somewhere? Open a PR adding yourself to this section.
 
 ## Licence
 

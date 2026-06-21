@@ -1,7 +1,11 @@
 {
-  "name": "appstore-cli",
+  "name": "appstore-flow",
   "version": "1.0.0",
-  "description": "CLI + MCP server for managing App Store Connect metadata, screenshots, and in-app purchases",
+  "description": "App Store Connect from your terminal — manage iOS listings, IAPs, subscriptions, and screenshots from YAML files. CLI + bundled MCP server.",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "type": "module",
   "bin": {
     "appstore": "./build/index.js",
