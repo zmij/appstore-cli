@@ -1342,7 +1342,13 @@ export class AppStoreClient {
     // single `manualPrices` row that points at the chosen price point in
     // that territory. The body uses a client-supplied placeholder id
     // ("${manualPrice}") that ties the row to the schedule before it
-    // exists on the server.
+    // exists on the server — that link is declared on the PARENT schedule
+    // via `relationships.manualPrices`, not as a back-pointer on the price
+    // row itself. ASC v3 rejects an `inAppPurchasePriceSchedule` relationship
+    // on the included `inAppPurchasePrices` entry ("not a relationship on
+    // the resource 'inAppPurchasePrices'") — see issue #2426. The price row
+    // only carries its `inAppPurchasePricePoint` + `territory`, mirroring
+    // the working `subscriptionPrices` shape used by createSubscriptionBasePrice.
     const priceRef = '${manualPrice}';
     const resp = await inAppPurchasePriceSchedulesCreateInstance({
       client: this.client,
@@ -1369,9 +1375,6 @@ export class AppStoreClient {
             relationships: {
               inAppPurchasePricePoint: {
                 data: { id: basePricePointId, type: 'inAppPurchasePricePoints' },
-              },
-              inAppPurchasePriceSchedule: {
-                data: { id: '${schedule}', type: 'inAppPurchasePriceSchedules' },
               },
               territory: {
                 data: { id: baseTerritoryId, type: 'territories' },
