@@ -68,6 +68,12 @@ export function registerIAPCommands(program: Command): void {
     .description('Sync in-app purchase localisations from YAML')
     .option('--product-id <productId>', 'Sync specific product only')
     .option('--dry-run', 'Show what would be changed without applying')
+    .option(
+      '--fix',
+      'Auto-heal review_screenshot files that fail local validation ' +
+        '(resize to nearest accepted dim, flatten alpha, convert to ' +
+        'sRGB + 72 dpi). Modifies the source file in place.',
+    )
     .option('--key-id <keyId>', 'Use specific auth key')
     .action(async (options) => {
       try {
@@ -246,7 +252,10 @@ export function registerIAPCommands(program: Command): void {
               if (!options.dryRun) {
                 try {
                   if (liveShot?.id) await client.deleteInAppPurchaseReviewScreenshot(liveShot.id);
-                  await uploadReviewScreenshotBytes(client, 'purchase', existingPurchase.id, config.review_screenshot);
+                  await uploadReviewScreenshotBytes(
+                    client, 'purchase', existingPurchase.id, config.review_screenshot,
+                    { fix: !!options.fix },
+                  );
                   reviewScreenshotCount++;
                 } catch (err) {
                   errorCount++;
@@ -467,7 +476,10 @@ export function registerIAPCommands(program: Command): void {
               if (!options.dryRun) {
                 try {
                   if (liveShot?.id) await client.deleteSubscriptionReviewScreenshot(liveShot.id);
-                  await uploadReviewScreenshotBytes(client, 'subscription', existingSubscription.id, config.review_screenshot);
+                  await uploadReviewScreenshotBytes(
+                    client, 'subscription', existingSubscription.id, config.review_screenshot,
+                    { fix: !!options.fix },
+                  );
                   reviewScreenshotCount++;
                 } catch (err) {
                   errorCount++;
@@ -716,9 +728,33 @@ export function registerIAPCommands(program: Command): void {
         if (reviewScreenshot) {
           const name = reviewScreenshot.attributes?.fileName ?? '(unnamed)';
           const size = reviewScreenshot.attributes?.fileSize ?? 0;
-          const uploaded = reviewScreenshot.attributes?.assetDeliveryState?.state ?? 'UPLOADED';
+          const deliveryState = reviewScreenshot.attributes?.assetDeliveryState;
+          const rawState = deliveryState?.state ?? 'UPLOADED';
+          // Colour the state by outcome so a FAILED asset jumps out —
+          // pre-#2456 the same word was uncoloured next to a successful
+          // file size, so operators routinely missed it.
+          const stateLabel =
+            rawState === 'COMPLETE' ? chalk.green(rawState)
+            : rawState === 'FAILED' ? chalk.red(rawState)
+            : chalk.yellow(rawState);
           console.log(chalk.bold('\n  Review screenshot:'));
-          console.log(`    file: ${name} (${(size / 1024).toFixed(1)} KiB) — ${uploaded}`);
+          console.log(`    file: ${name} (${(size / 1024).toFixed(1)} KiB) — ${stateLabel}`);
+          // Surface Apple's per-asset error / warning payload. The
+          // shape is `errors: [{ code, description }]` — both fields
+          // are strings, but `description` is sometimes just a code
+          // alias (e.g. "IMAGE_INCORRECT_DIMENSIONS"). Print both.
+          const errors = (deliveryState?.errors ?? []) as Array<{ code?: string; description?: string }>;
+          for (const e of errors) {
+            const tag = e.code ?? '(no-code)';
+            const detail = e.description && e.description !== e.code ? `: ${e.description}` : '';
+            console.log(`      ${chalk.red('✗')} ${tag}${detail}`);
+          }
+          const warnings = (deliveryState?.warnings ?? []) as Array<{ code?: string; description?: string }>;
+          for (const w of warnings) {
+            const tag = w.code ?? '(no-code)';
+            const detail = w.description && w.description !== w.code ? `: ${w.description}` : '';
+            console.log(`      ${chalk.yellow('⚠')} ${tag}${detail}`);
+          }
         } else {
           console.log(chalk.gray('\n  Review screenshot: (none — required before submission)'));
         }
@@ -1726,22 +1762,50 @@ async function uploadReviewScreenshotBytes(
   kind: 'purchase' | 'subscription',
   productAscId: string,
   filePath: string,
+  options: { fix?: boolean } = {},
 ): Promise<void> {
   const { readFileSync, statSync, existsSync } = await import('fs');
   const { createHash } = await import('crypto');
   const { basename } = await import('path');
-  const { validateReviewScreenshotDimensions } = await import('../imageValidation.js');
+  const {
+    validateIapReviewScreenshot,
+    formatValidationFailures,
+    healIapReviewScreenshot,
+  } = await import('../imageValidation.js');
 
   if (!existsSync(filePath)) {
     throw new Error(`review_screenshot file not found: ${filePath}`);
   }
-  // Sanity-check dims + format BEFORE reserving the asset. ASC accepts
-  // the reservation either way; if Apple's post-process can't make
-  // sense of the file it silently flips the asset to FAILED hours
-  // later, which is what makes this class of bug invisible.
-  const dimCheck = validateReviewScreenshotDimensions(filePath);
-  if (!dimCheck.valid) {
-    throw new Error(`review_screenshot rejected: ${dimCheck.reason}`);
+
+  // Pre-upload validation. Apple's post-process silently flips
+  // mismatched assets to FAILED hours after the commit; surface every
+  // failed rule at once and (if --fix is set) auto-heal the file in
+  // place via the proven sharp recipe before re-validating.
+  let validation = await validateIapReviewScreenshot(filePath);
+  if (!validation.valid && options.fix) {
+    console.log(chalk.yellow(`      ⚠ validation failed; healing in place:`));
+    console.log(formatValidationFailures(validation.failures));
+    const { before, after, upscaled } = await healIapReviewScreenshot(filePath);
+    const upscaleNote = upscaled ? chalk.yellow(' (upscaled — quality loss possible)') : '';
+    console.log(
+      chalk.cyan(
+        `      ↻ healed: ${before.width}×${before.height} → ${after.width}×${after.height}, ` +
+          `alpha ${before.hasAlpha ? 'YES' : 'no'} → ${after.hasAlpha ? 'YES' : 'no'}, ` +
+          `density ${before.density ?? '?'} → ${after.density ?? '?'} dpi` +
+          upscaleNote,
+      ),
+    );
+    validation = await validateIapReviewScreenshot(filePath);
+  }
+  if (!validation.valid) {
+    const lines = formatValidationFailures(validation.failures);
+    throw new Error(
+      `review_screenshot rejected by local validator ` +
+        `(would FAIL silently on ASC):\n` +
+        `${lines}\n` +
+        `      Re-run with --fix to auto-heal, or normalise manually with the ` +
+        `magick recipe in docs/iap-screenshots.md.`,
+    );
   }
   const bytes = readFileSync(filePath);
   const size = statSync(filePath).size;

@@ -445,11 +445,12 @@ export function registerScreenshotsCommands(program: Command): void {
                   // Apple's post-process flips the asset to FAILED
                   // hours later). Catching this before reserve saves
                   // the operator a debugging round-trip.
-                  const dimCheck = validateAppScreenshotDimensions(filePath, displayType);
+                  const dimCheck = await validateAppScreenshotDimensions(filePath, displayType);
                   if (!dimCheck.valid) {
-                    console.error(
-                      chalk.red(`      ✗ ${s.filename}: ${dimCheck.reason}`),
-                    );
+                    const reasons = dimCheck.failures
+                      .map((f) => `${f.rule}: expected ${f.expected}; got ${f.got}`)
+                      .join('; ');
+                    console.error(chalk.red(`      ✗ ${s.filename}: ${reasons}`));
                     totalErrors++;
                     continue;
                   }
