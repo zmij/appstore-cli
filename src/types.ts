@@ -76,6 +76,10 @@ export interface InAppPurchase {
    *  this IAP appears in the app. Required for submission. Sync replaces
    *  any existing screenshot when the local file is set. */
   review_screenshot?: string;
+  /** Free-text note Apple Review reads alongside the screenshot
+   *  (e.g. "tap Settings → Pro → Unlock to reach this purchase").
+   *  Synced via PATCH; can be set on create and updated on existing IAPs. */
+  review_note?: string;
   localisations: Record<string, IAPLocalisation>;
 }
 
@@ -142,6 +146,9 @@ export interface Subscription {
   /** Local path to a PNG / JPEG that Apple Review uses to verify where
    *  this subscription is purchased in the app. Required for submission. */
   review_screenshot?: string;
+  /** Free-text note Apple Review reads alongside the screenshot.
+   *  Synced via PATCH; can be set on create and updated on existing subs. */
+  review_note?: string;
   localisations: Record<string, IAPLocalisation>;
 }
 
@@ -195,6 +202,35 @@ export const DEVICE_TYPE_MAP: Record<string, string> = {
   'ipad-11': 'APP_IPAD_PRO_3GEN_11',
   'ipad-12.9': 'APP_IPAD_PRO_129',
   'ipad-13': 'APP_IPAD_PRO_3GEN_129',
+};
+
+/**
+ * Apple's required screenshot dimensions per ASC display type.
+ *
+ * Each entry lists the acceptable PORTRAIT (w, h) pairs for that
+ * display type; landscape (h, w) is also accepted at the same numbers
+ * swapped. ASC silently rejects screenshots that don't match one of
+ * these pairs — the upload commits cleanly but the file never appears
+ * in the listing — so the upload command validates each file's
+ * `(width, height)` against this table before reserving the asset.
+ *
+ * Source:
+ * https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications
+ *
+ * Notes:
+ *   - APP_IPHONE_67 is shared between Apple's "6.7\"" and "6.9\""
+ *     marketing tiers; both pixel pairs are valid.
+ *   - APP_IPHONE_61 is shared between "6.1\"" and "6.3\"" tiers.
+ *   - APP_IPAD_PRO_3GEN_11 covers four generations of 11" iPad Pro/Air
+ *     hardware; Apple accepts any of the four historical pairs.
+ */
+export const SCREENSHOT_DIMENSIONS: Record<string, ReadonlyArray<readonly [number, number]>> = {
+  APP_IPHONE_67: [[1290, 2796], [1260, 2736]],
+  APP_IPHONE_65: [[1284, 2778], [1242, 2688]],
+  APP_IPHONE_61: [[1179, 2556], [1170, 2532]],
+  APP_IPAD_PRO_3GEN_129: [[2064, 2752]],
+  APP_IPAD_PRO_129: [[2048, 2732]],
+  APP_IPAD_PRO_3GEN_11: [[1488, 2266], [1668, 2420], [1668, 2388], [1640, 2360]],
 };
 
 /**

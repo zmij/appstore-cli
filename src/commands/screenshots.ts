@@ -9,6 +9,7 @@ import chalk from 'chalk';
 import { createClient } from '../client.js';
 import { LANGUAGE_MAP, LOCALE_EXPAND, DEVICE_TYPE_MAP } from '../types.js';
 import type { ParsedScreenshotFilename, ScreenshotUploadMode } from '../types.js';
+import { validateAppScreenshotDimensions } from '../imageValidation.js';
 
 export function registerScreenshotsCommands(program: Command): void {
   const screenshotsCmd = program
@@ -438,6 +439,21 @@ export function registerScreenshotsCommands(program: Command): void {
               for (const s of sorted) {
                 try {
                   const filePath = join(options.source, s.filename);
+
+                  // Pre-upload dimension check. ASC silently rejects
+                  // mismatched dimensions (reservation + commit succeed,
+                  // Apple's post-process flips the asset to FAILED
+                  // hours later). Catching this before reserve saves
+                  // the operator a debugging round-trip.
+                  const dimCheck = validateAppScreenshotDimensions(filePath, displayType);
+                  if (!dimCheck.valid) {
+                    console.error(
+                      chalk.red(`      ✗ ${s.filename}: ${dimCheck.reason}`),
+                    );
+                    totalErrors++;
+                    continue;
+                  }
+
                   const fileContent = readFileSync(filePath);
                   const fileSize = statSync(filePath).size;
                   const checksum = createHash('md5').update(fileContent).digest('hex');
