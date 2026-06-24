@@ -225,7 +225,10 @@ export const DEVICE_TYPE_MAP: Record<string, string> = {
  *     hardware; Apple accepts any of the four historical pairs.
  */
 export const SCREENSHOT_DIMENSIONS: Record<string, ReadonlyArray<readonly [number, number]>> = {
-  APP_IPHONE_67: [[1290, 2796], [1260, 2736]],
+  // 1320×2868 is the iPhone 17 Pro Max / 16 Pro Max recently-added 6.9"
+  // dimension Apple started accepting in 2025; some 6.7" / 6.9" submissions
+  // still upload at 1290×2796 / 1260×2736 (the docs list both).
+  APP_IPHONE_67: [[1320, 2868], [1290, 2796], [1260, 2736]],
   APP_IPHONE_65: [[1284, 2778], [1242, 2688]],
   APP_IPHONE_61: [[1179, 2556], [1170, 2532]],
   APP_IPAD_PRO_3GEN_129: [[2064, 2752]],
