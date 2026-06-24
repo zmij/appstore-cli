@@ -118,6 +118,7 @@ export function registerIAPCommands(program: Command): void {
         let availabilityCount = 0;
         let introOfferCount = 0;
         let reviewScreenshotCount = 0;
+        let reviewNoteCount = 0;
 
         // Resolve YAML `territories: 'all'` to the live set already on
         // the product — handy for stay-at-full-coverage edits where the
@@ -250,6 +251,33 @@ export function registerIAPCommands(program: Command): void {
                 } catch (err) {
                   errorCount++;
                   console.error(chalk.red(`      ✗ ${err instanceof Error ? err.message : err}`));
+                }
+              }
+            }
+
+            // Review note — short free-text instruction for Apple Review.
+            // Diffed against the live attribute; pushed via PATCH when
+            // they differ. Treats empty-string YAML as "clear the note"
+            // (Apple stores it as null), so YAML→ASC is fully round-trip.
+            if (config.review_note !== undefined) {
+              const liveNote = (existingPurchase as any).attributes?.reviewNote ?? '';
+              const desiredNote = config.review_note;
+              if (liveNote === desiredNote) {
+                console.log(chalk.gray(`    review_note unchanged`));
+              } else {
+                const verb = liveNote ? chalk.yellow('update') : chalk.green('set');
+                console.log(`    review_note ${verb}: ${truncate(desiredNote, 60)}`);
+                if (!options.dryRun) {
+                  try {
+                    await client.updateInAppPurchase({
+                      iapId: existingPurchase.id,
+                      reviewNote: desiredNote,
+                    });
+                    reviewNoteCount++;
+                  } catch (err) {
+                    errorCount++;
+                    console.error(chalk.red(`      ✗ ${err instanceof Error ? err.message : err}`));
+                  }
                 }
               }
             }
@@ -447,6 +475,30 @@ export function registerIAPCommands(program: Command): void {
                 }
               }
             }
+
+            // Review note (subscription side) — mirrors the IAP branch.
+            if (config.review_note !== undefined) {
+              const liveNote = (existingSubscription as any).attributes?.reviewNote ?? '';
+              const desiredNote = config.review_note;
+              if (liveNote === desiredNote) {
+                console.log(chalk.gray(`    review_note unchanged`));
+              } else {
+                const verb = liveNote ? chalk.yellow('update') : chalk.green('set');
+                console.log(`    review_note ${verb}: ${truncate(desiredNote, 60)}`);
+                if (!options.dryRun) {
+                  try {
+                    await client.updateSubscription({
+                      subId: existingSubscription.id,
+                      reviewNote: desiredNote,
+                    });
+                    reviewNoteCount++;
+                  } catch (err) {
+                    errorCount++;
+                    console.error(chalk.red(`      ✗ ${err instanceof Error ? err.message : err}`));
+                  }
+                }
+              }
+            }
           }
         }
 
@@ -461,6 +513,7 @@ export function registerIAPCommands(program: Command): void {
         if (availabilityCount > 0) console.log(chalk.green(`Availabilities: ${availabilityCount}`));
         if (introOfferCount > 0) console.log(chalk.green(`Intro offers (created+deleted): ${introOfferCount}`));
         if (reviewScreenshotCount > 0) console.log(chalk.green(`Review screenshots uploaded: ${reviewScreenshotCount}`));
+        if (reviewNoteCount > 0) console.log(chalk.green(`Review notes updated: ${reviewNoteCount}`));
         if (errorCount > 0) console.log(chalk.red(`  errors: ${errorCount}`));
         if (errorCount > 0) process.exit(1);
       } catch (error) {
@@ -588,11 +641,15 @@ export function registerIAPCommands(program: Command): void {
         let kind: 'purchase' | 'subscription' | null = null;
         let productAscId: string | null = null;
         let referenceName = '';
+        // Hold the matched product object so downstream blocks (review_note,
+        // future fields) can read its attributes without re-walking the list.
+        let productMatch: any = null;
 
         if (purchaseMatch) {
           kind = 'purchase';
           productAscId = purchaseMatch.id;
           referenceName = purchaseMatch.attributes?.referenceName ?? '';
+          productMatch = purchaseMatch;
         } else {
           const groups = await client.listSubscriptions();
           for (const group of groups) {
@@ -602,6 +659,7 @@ export function registerIAPCommands(program: Command): void {
               kind = 'subscription';
               productAscId = match.id;
               referenceName = match.attributes?.name ?? '';
+              productMatch = match;
               break;
             }
           }
@@ -663,6 +721,16 @@ export function registerIAPCommands(program: Command): void {
           console.log(`    file: ${name} (${(size / 1024).toFixed(1)} KiB) — ${uploaded}`);
         } else {
           console.log(chalk.gray('\n  Review screenshot: (none — required before submission)'));
+        }
+
+        // Review note — same shape on both product flavours; read off
+        // the cached match. Apple stores empty as null.
+        const reviewNote = productMatch?.attributes?.reviewNote;
+        if (reviewNote) {
+          console.log(chalk.bold('\n  Review note:'));
+          console.log(`    ${reviewNote.replace(/\n/g, '\n    ')}`);
+        } else {
+          console.log(chalk.gray('\n  Review note: (none)'));
         }
 
         // Intro offers are subscription-only; skip for one-shot IAPs.
@@ -829,6 +897,7 @@ export function registerIAPCommands(program: Command): void {
                 name: config.reference_name || productId,
                 type: config.type,
                 familySharable: config.family_sharable,
+                reviewNote: config.review_note,
               });
               console.log(chalk.green(`    ✓ created (id ${newId})`));
               createdPurchases++;
@@ -881,6 +950,7 @@ export function registerIAPCommands(program: Command): void {
                 subscriptionPeriod: config.subscription_period,
                 familySharable: config.family_sharable,
                 groupLevel: config.group_level,
+                reviewNote: config.review_note,
               });
               console.log(chalk.green(`    ✓ created (id ${newId})`));
               createdSubscriptions++;
@@ -1090,6 +1160,7 @@ async function fetchLiveIapState(
           territories: availability.territories,
         },
       }),
+      ...(purchase.attributes?.reviewNote && { review_note: purchase.attributes.reviewNote }),
       localisations: yamlLocs,
     };
     if (logProgress) {
@@ -1172,6 +1243,7 @@ async function fetchLiveIapState(
           },
         }),
         ...(yamlIntroOffers.length > 0 && { intro_offers: yamlIntroOffers }),
+        ...(sub.attributes?.reviewNote && { review_note: sub.attributes.reviewNote }),
         localisations: yamlLocs,
       };
       if (logProgress) {
@@ -1264,7 +1336,7 @@ function mergeLiveIntoDocument(
     } else {
       const yamlEntry = purchasesNode.get(productId, true);
       const before = { added, localesAdded };
-      mergeYamlEntryFields(doc, yamlEntry, livePurchase, ['type', 'family_sharable', 'price', 'availability'], dryRun, `purchases/${productId}`);
+      mergeYamlEntryFields(doc, yamlEntry, livePurchase, ['type', 'family_sharable', 'price', 'availability', 'review_note'], dryRun, `purchases/${productId}`);
       mergeYamlLocalisations(doc, yamlEntry, livePurchase.localisations, dryRun, `purchases/${productId}`, (n) => { localesAdded += n; });
       if (added !== before.added || localesAdded !== before.localesAdded) updated++;
     }
@@ -1283,7 +1355,7 @@ function mergeLiveIntoDocument(
       const before = { added, localesAdded };
       mergeYamlEntryFields(
         doc, yamlEntry, liveSub,
-        ['group', 'subscription_period', 'family_sharable', 'group_level', 'price', 'availability', 'intro_offers'],
+        ['group', 'subscription_period', 'family_sharable', 'group_level', 'price', 'availability', 'intro_offers', 'review_note'],
         dryRun, `subscriptions/${productId}`,
       );
       mergeYamlLocalisations(doc, yamlEntry, liveSub.localisations, dryRun, `subscriptions/${productId}`, (n) => { localesAdded += n; });
@@ -1658,9 +1730,18 @@ async function uploadReviewScreenshotBytes(
   const { readFileSync, statSync, existsSync } = await import('fs');
   const { createHash } = await import('crypto');
   const { basename } = await import('path');
+  const { validateReviewScreenshotDimensions } = await import('../imageValidation.js');
 
   if (!existsSync(filePath)) {
     throw new Error(`review_screenshot file not found: ${filePath}`);
+  }
+  // Sanity-check dims + format BEFORE reserving the asset. ASC accepts
+  // the reservation either way; if Apple's post-process can't make
+  // sense of the file it silently flips the asset to FAILED hours
+  // later, which is what makes this class of bug invisible.
+  const dimCheck = validateReviewScreenshotDimensions(filePath);
+  if (!dimCheck.valid) {
+    throw new Error(`review_screenshot rejected: ${dimCheck.reason}`);
   }
   const bytes = readFileSync(filePath);
   const size = statSync(filePath).size;

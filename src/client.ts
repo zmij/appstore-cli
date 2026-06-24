@@ -55,8 +55,10 @@ import {
   subscriptionLocalizationsDeleteInstance,
   // IAP / subscription create (Phase 5)
   inAppPurchasesV2CreateInstance,
+  inAppPurchasesV2UpdateInstance,
   subscriptionGroupsCreateInstance,
   subscriptionsCreateInstance,
+  subscriptionsUpdateInstance,
   // Subscription introductory offers (Phase 3a)
   subscriptionsIntroductoryOffersGetToManyRelated,
   subscriptionIntroductoryOffersCreateInstance,
@@ -630,12 +632,20 @@ export class AppStoreClient {
   // ============================================================================
 
   /**
-   * List in-app purchases
+   * List in-app purchases. The default response omits `reviewNote`;
+   * pass an explicit `fields[inAppPurchases]` list so the v2 endpoint
+   * surfaces every attribute the rest of the CLI reads from
+   * `attributes` (name + classification + reviewNote).
    */
   async listInAppPurchases(): Promise<any[]> {
     const response = await appsInAppPurchasesV2GetToManyRelated({
       client: this.client,
       path: { id: this.appId },
+      query: {
+        'fields[inAppPurchases]': [
+          'name', 'productId', 'inAppPurchaseType', 'familySharable', 'state', 'reviewNote',
+        ],
+      } as any,
     });
 
     return response.data?.data || [];
@@ -740,11 +750,18 @@ export class AppStoreClient {
 
   // -- Subscription groups ----------------------------------------------------
 
-  /** List every subscription product inside one subscription group. */
+  /** List every subscription product inside one subscription group.
+   *  Like `listInAppPurchases`, request `reviewNote` explicitly so the
+   *  response carries everything the CLI reads off `attributes`. */
   async listSubscriptionsInGroup(groupId: string): Promise<any[]> {
     const response = await subscriptionGroupsSubscriptionsGetToManyRelated({
       client: this.client,
       path: { id: groupId },
+      query: {
+        'fields[subscriptions]': [
+          'name', 'productId', 'subscriptionPeriod', 'familySharable', 'state', 'reviewNote', 'groupLevel',
+        ],
+      } as any,
     });
     return response.data?.data || [];
   }
@@ -924,6 +941,39 @@ export class AppStoreClient {
   }
 
   /**
+   * Update mutable attributes on an existing IAP. `name` and
+   * `familySharable` are also patchable here per the v2 schema, but
+   * the current caller (iap sync) only flows `reviewNote` through —
+   * see #2450 for the full wiring story.
+   */
+  async updateInAppPurchase(opts: {
+    iapId: string;
+    name?: string;
+    familySharable?: boolean;
+    reviewNote?: string;
+  }): Promise<void> {
+    const attributes: Record<string, unknown> = {};
+    if (opts.name !== undefined) attributes.name = opts.name;
+    if (opts.familySharable !== undefined) attributes.familySharable = opts.familySharable;
+    // Empty string explicitly clears the note on Apple's side; `undefined`
+    // leaves it alone. The caller (iap sync) decides which.
+    if (opts.reviewNote !== undefined) attributes.reviewNote = opts.reviewNote;
+    if (Object.keys(attributes).length === 0) return;
+    const resp = await inAppPurchasesV2UpdateInstance({
+      client: this.client,
+      path: { id: opts.iapId },
+      body: {
+        data: {
+          id: opts.iapId,
+          type: 'inAppPurchases',
+          attributes,
+        },
+      } as any,
+    });
+    throwIfError(resp);
+  }
+
+  /**
    * Create a new subscription group. The group is the container that
    * lets users upgrade/downgrade between tiers (monthly ↔ yearly within
    * the same family). Returns the ASC group id.
@@ -980,6 +1030,38 @@ export class AppStoreClient {
     });
     throwIfError(resp);
     return (resp.data?.data as any)?.id ?? '';
+  }
+
+  /**
+   * Update mutable attributes on an existing subscription. Mirrors
+   * `updateInAppPurchase` — the sync caller only flows `reviewNote`
+   * through today (see #2450).
+   */
+  async updateSubscription(opts: {
+    subId: string;
+    name?: string;
+    familySharable?: boolean;
+    groupLevel?: number;
+    reviewNote?: string;
+  }): Promise<void> {
+    const attributes: Record<string, unknown> = {};
+    if (opts.name !== undefined) attributes.name = opts.name;
+    if (opts.familySharable !== undefined) attributes.familySharable = opts.familySharable;
+    if (opts.groupLevel !== undefined) attributes.groupLevel = opts.groupLevel;
+    if (opts.reviewNote !== undefined) attributes.reviewNote = opts.reviewNote;
+    if (Object.keys(attributes).length === 0) return;
+    const resp = await subscriptionsUpdateInstance({
+      client: this.client,
+      path: { id: opts.subId },
+      body: {
+        data: {
+          id: opts.subId,
+          type: 'subscriptions',
+          attributes,
+        },
+      } as any,
+    });
+    throwIfError(resp);
   }
 
   // ============================================================================
