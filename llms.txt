@@ -1,0 +1,30 @@
+# appstore-flow
+
+> CLI + bundled MCP server for managing iOS App Store Connect metadata, in-app purchases, subscriptions, and screenshots from YAML files. Designed for teams that want their store listing under version control instead of click-driven through the App Store Connect website.
+
+Install: `npm install -g appstore-flow`. Two binaries land on `$PATH`: `appstore` (CLI, commander.js) and `appstore-mcp` (Model Context Protocol server, stdio). Both wrap the same client code over Apple's official App Store Connect SDK. The GitHub repo is `zmij/appstore-cli` (legacy slug from before the npm rebrand to `appstore-flow`).
+
+Battle-tested on [Lazy Sudoku](https://lazy-sudoku.online) — 14-locale store listing, 12 IAP products across 173 territories of pricing, subscription groups with intro offers, all reconciled via YAML round-trip.
+
+## Docs
+
+- [Home](https://zmij.github.io/appstore-cli/index.md): What it does, key features, install snippet, in-production note.
+- [Get started](https://zmij.github.io/appstore-cli/getting-started.md): 5-minute walkthrough — install, create an ASC API key, drop the config, pull live state into YAML, edit, sync back, optional MCP wire-up.
+- [Authentication](https://zmij.github.io/appstore-cli/auth.md): JWT key creation, role selection, key rotation, env-var overrides (`APPSTORE_KEY_ID`, `APPSTORE_SECRETS_DIR`, `APPSTORE_METADATA_DIR`).
+- [Workflow](https://zmij.github.io/appstore-cli/workflow.md): Full export → edit → sync → pull → reconcile loop, plus the `create` and `migrate-prices` paths.
+
+## Reference
+
+- [IAP schema](https://zmij.github.io/appstore-cli/iap-schema.md): YAML schema for `iap.yaml` — one-time purchases, subscriptions, subscription groups, intro offers, review screenshots, per-territory pricing.
+- [Listings schema](https://zmij.github.io/appstore-cli/listings-schema.md): Per-locale `listings/<lang>.yaml` shape; keyword + length limits per field (name 30, subtitle 30, promo 170, description 4000, keywords 100, what's new 4000).
+- [Apple quirks](https://zmij.github.io/appstore-cli/quirks.md): Non-obvious gotchas the CLI works around — `preserveCurrentPrice`, tier price points, editable version states, edit sessions, subscription state lifecycle, MCP edit-session cleanup.
+
+## Source + MCP
+
+- [GitHub repo](https://github.com/zmij/appstore-cli) — issues, PRs, releases.
+- [README](https://github.com/zmij/appstore-cli/blob/master/README.md) — install, command reference, full MCP setup (Claude Code + other clients), Configuration table.
+- [CLAUDE.md](https://github.com/zmij/appstore-cli/blob/master/CLAUDE.md) — agent-facing development notes; rules and layout for contributing changes to the CLI / client / MCP server.
+
+## Optional
+
+- [Full content](https://zmij.github.io/appstore-cli/llms-full.txt): All docs concatenated into a single file for one-shot ingestion.

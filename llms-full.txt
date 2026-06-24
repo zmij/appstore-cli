@@ -1,0 +1,965 @@
+# appstore-flow — full documentation
+
+Single-file concatenation of every page on the appstore-flow docs site,
+for one-shot LLM ingestion. Live site: https://zmij.github.io/appstore-cli/
+
+Install: npm install -g appstore-flow (GitHub repo lives at zmij/appstore-cli).
+
+Page index:
+- What is appstore-flow? — https://zmij.github.io/appstore-cli/
+- Get started — https://zmij.github.io/appstore-cli/getting-started
+- Authentication — https://zmij.github.io/appstore-cli/auth
+- Workflow — https://zmij.github.io/appstore-cli/workflow
+- IAP schema — https://zmij.github.io/appstore-cli/iap-schema
+- Listings schema — https://zmij.github.io/appstore-cli/listings-schema
+- Apple quirks — https://zmij.github.io/appstore-cli/quirks
+
+---
+# What is appstore-flow?
+
+Source: https://zmij.github.io/appstore-cli/
+
+## What it does
+
+`appstore-flow` puts your iOS store presence under version control. Instead of clicking through App Store Connect's per-locale tabs to update copy, prices, or screenshots, you pull live state into committed YAML, edit it in your editor, and sync it back through normal PR review.
+
+The bundled `appstore-mcp` server exposes the same client code over stdio so any MCP-aware agent — Claude Code, Cursor, Windsurf, Cline, Continue, Zed — can read and update live store state without shelling out.
+
+## Quick install
+
+```bash
+npm install -g appstore-flow
+# or, from a checkout (the GitHub repo is still `appstore-cli` —
+# only the npm package name has been rebranded to `appstore-flow`):
+git clone https://github.com/zmij/appstore-cli.git
+cd appstore-cli && npm install && npm run build && npm link
+```
+
+Then see [Get started](/getting-started) for the first-run walkthrough.
+
+## In production
+
+> I built this to manage [Lazy Sudoku](https://lazy-sudoku.online)'s App Store listing — 14 locales, 12 IAP products across 173 territories of pricing, plus subscription groups with intro offers. Editing YAML in my editor and running `appstore listings sync` / `appstore iap sync` is dramatically less error-prone than clicking through App Store Connect's per-locale tabs, and lets every store change land via normal PR review.
+>
+> — *Sergei Fedorov, [Lazy Sudoku](https://lazy-sudoku.online)*
+
+Using appstore-flow somewhere? [Open a PR](https://github.com/zmij/appstore-cli/blob/master/README.md) adding yourself to the Adopters section in the README.
+
+---
+
+# Get started
+
+Source: https://zmij.github.io/appstore-cli/getting-started
+
+# Get started
+
+A 5-minute walkthrough from zero to your first round-tripped App Store listing.
+
+## 1. Install
+
+```bash
+npm install -g appstore-flow
+```
+
+Two binaries land on your `PATH`:
+
+| Binary | Purpose |
+|---|---|
+| `appstore` | The CLI |
+| `appstore-mcp` | The MCP server (stdio) — used by Claude Code / Cursor / other agents |
+
+Verify:
+
+```bash
+appstore --help
+which appstore-mcp
+```
+
+If you'd rather work from a checkout (handy when contributing back):
+
+```bash
+git clone https://github.com/zmij/appstore-cli.git
+cd appstore-cli && npm install && npm run build && npm link
+```
+
+## 2. Get an App Store Connect API key
+
+App Store Connect → **Users and Access → Integrations → App Store Connect API**. Create a key with the role that matches what you'll do (App Manager for everything in this CLI; Developer if you only need read).
+
+Download the `.p8` file once — Apple won't show it again. Keep it out of git.
+
+Note the **Issuer ID** (top of the Keys page) and your **app's resource ID** (App Store Connect → your app → App Information → Apple ID, the numeric one).
+
+See [Authentication](/auth) for key rotation, role selection, and env-var overrides.
+
+## 3. Drop the config file
+
+The CLI looks for credentials in `<repo>/.secret-stuff/` by default. Create the directory (gitignored — never commit) and the config:
+
+```yaml
+# .secret-stuff/appstore-config.yaml
+issuer_id: "00000000-0000-0000-0000-000000000000"
+app_id: "1234567890"
+keys:
+  app_manager:
+    key_id: "ABCDEF1234"
+    key_file: "AuthKey_ABCDEF1234.p8"
+default_key: "app_manager"
+```
+
+Drop the `.p8` file next to it: `.secret-stuff/AuthKey_ABCDEF1234.p8`.
+
+**Different layout?** Set `APPSTORE_SECRETS_DIR=/abs/path` to point at any other directory, or commit an `appstore-cli.config.yaml` with `secrets_dir:` / `metadata_dir:` overrides. See the [README's Configuration section](https://github.com/zmij/appstore-cli#configuration).
+
+## 4. Pull live state into YAML
+
+Read-only — proves auth works and gives you a starting point.
+
+```bash
+# Listings: per-locale store copy → l10n/metadata/apple/listings/<lang>.yaml
+appstore listings export
+
+# IAP catalogue: every product / subscription / group → l10n/metadata/apple/iap.yaml
+appstore iap export --output l10n/metadata/apple/iap.yaml
+```
+
+Open the files. Commit them — they are now the source of truth for your store.
+
+## 5. Edit + push
+
+Edit a value in `l10n/metadata/apple/listings/en-GB.yaml` — say, the `promotional_text:`. Then preview before pushing:
+
+```bash
+# Show what would change vs. live state
+appstore listings sync --dry-run
+
+# Push it
+appstore listings sync
+```
+
+Same shape for IAP:
+
+```bash
+appstore iap sync --dry-run
+appstore iap sync
+```
+
+`sync` only patches fields that differ — your hand-edits don't overwrite the world. See [Workflow](/workflow) for the full export → edit → sync → pull → reconcile loop.
+
+## 6. (Optional) Wire up the MCP server
+
+Let Claude Code (or any MCP client) read live store state during release prep without you leaving the terminal:
+
+```bash
+# In the project directory where your secrets live
+claude mcp add appstore appstore-mcp
+```
+
+Then ask the agent things like *"show me the en-GB listing"* or *"list all in-app purchases"*. The agent calls the same client code the CLI uses — no shelling.
+
+See the [README's MCP Server section](https://github.com/zmij/appstore-cli#mcp-server) for scope (local / project / user), other MCP clients (Cursor, Windsurf, Cline), and the working-directory + auth gotchas.
+
+## Next steps
+
+- [Workflow](/workflow) — full export → edit → sync → pull → reconcile loop with `migrate-prices` and `create` paths.
+- [IAP schema](/iap-schema) — every field in `iap.yaml`: purchases, subscriptions, groups, intro offers, review screenshots.
+- [Listings schema](/listings-schema) — per-locale `listings/<lang>.yaml` shape; keyword + length limits.
+- [Apple quirks](/quirks) — the non-obvious gotchas the CLI works around (preserveCurrentPrice, tier price points, edit sessions, …).
+
+---
+
+# Authentication
+
+Source: https://zmij.github.io/appstore-cli/auth
+
+# Authentication
+
+The CLI authenticates to App Store Connect via API keys + JWT. This doc covers how to create the keys, what scopes they need, and how the CLI rotates them.
+
+## TL;DR
+
+```bash
+# 1. Create a key on App Store Connect (see below)
+# 2. Download the .p8 file to .secret-stuff/
+# 3. Write .secret-stuff/appstore-config.yaml:
+#    issuer_id: "<your-issuer-uuid>"
+#    app_id: "<numeric-app-id>"
+#    keys:
+#      app_manager:
+#        key_id: "ABCDE12345"
+#        key_file: "AuthKey_ABCDE12345.p8"
+#    default_key: "app_manager"
+# 4. Smoke-test:
+appstore info
+```
+
+## Creating a key
+
+[App Store Connect → Users and Access → Integrations → App Store Connect API](https://appstoreconnect.apple.com/access/api).
+
+1. Click **Generate API Key** (or **+** if you already have one).
+2. Pick an **access role** — see below for what each role allows.
+3. Download the `.p8` immediately. **Apple shows it once.** If you lose it, revoke and regenerate.
+4. Note the **Key ID** (10 characters, shown next to the key name) and your **Issuer ID** (UUID at the top of the Keys page).
+5. Drop the `.p8` in `.secret-stuff/` and reference its filename in `appstore-config.yaml`.
+
+## Access roles
+
+| Role | What the CLI can do |
+|---|---|
+| **Admin** | Everything. Avoid unless you need it for a one-off. |
+| **App Manager** | Listings, IAPs, subscriptions, screenshots, custom product pages. **Default choice for the CLI.** |
+| **Developer** | Read-only on most things; cannot edit listings or push pricing. |
+| **Marketer** | Listings + screenshots only. Useful for a "marketing-only" key that can't touch pricing. |
+| **Customer Support** | Reads + responds to reviews. Not relevant to this CLI. |
+
+For day-to-day use, **App Manager** is the right pick. The CLI will refuse to do something the key can't do — you'll get a 403 from ASC with a clear message.
+
+## Multiple keys
+
+You can configure multiple keys with different roles. Useful when you want a separate key for build uploads (often automated, in CI) from one for metadata edits:
+
+```yaml
+keys:
+  build_upload:
+    key_id: "AAAAA11111"
+    key_file: "AuthKey_AAAAA11111.p8"
+  app_manager:
+    key_id: "BBBBB22222"
+    key_file: "AuthKey_BBBBB22222.p8"
+default_key: "app_manager"
+```
+
+Pick a non-default key per call with `--key-id build_upload`, or set `APPSTORE_KEY_ID` for the whole shell.
+
+## JWT lifecycle
+
+The CLI generates a fresh JWT per command run (Apple tokens are valid for 20 minutes). The signing is done locally in-process — your `.p8` never leaves your machine. The token is:
+
+- `iss` — issuer ID from config
+- `kid` — key ID from the selected key
+- `aud` — `appstoreconnect-v1`
+- `exp` — `now + 19m` (1-minute safety margin under Apple's 20-minute limit)
+- Signed with `ES256` using the `.p8` private key
+
+There's nothing to refresh or cache. If a long-running operation crosses the 20-minute boundary, Apple will reject the call; the CLI surfaces the error and you re-run. (In practice, no single command takes that long — the slowest is a full `iap export` over 173 territories × 12 products, which is still under 2 minutes.)
+
+## Key rotation
+
+```bash
+# 1. Generate a new key on ASC (don't revoke the old one yet)
+# 2. Drop the new .p8 in .secret-stuff/
+# 3. Add it as a new entry in appstore-config.yaml
+# 4. Run a smoke test with --key-id <new>
+appstore info --key-id app_manager_v2
+# 5. Once you've confirmed it works, flip default_key + revoke the old one on ASC
+```
+
+## Validating auth
+
+The CLI doesn't ship a dedicated `appstore auth` command (yet). The cheapest validation is `appstore info` — it makes a single read call and prints the bundle ID. If that returns, your auth is wired.
+
+```bash
+appstore info
+# {
+#   "id": "1234567890",
+#   "name": "Your App",
+#   "bundleId": "com.you.yourapp",
+#   ...
+# }
+```
+
+If you see `401 Unauthorized`, the most common causes:
+
+- `.p8` file doesn't match the `key_id` in your config
+- Issuer ID typo
+- Key was revoked or expired on ASC
+
+If you see `403 Forbidden`, the key doesn't have the role for the operation. Switch to a higher-privilege key or pick a different role for this key.
+
+## Security
+
+- **Never commit `.p8` or `appstore-config.yaml`.** The repo's `.gitignore` should include `.secret-stuff/` — verify before your first commit.
+- The CLI reads `.p8` files from disk on every command invocation. They're not cached in memory longer than the process lifetime.
+- JWTs are signed with the private key locally; the key is never sent to Apple.
+
+## Env-var overrides
+
+For CI or one-off scripts:
+
+| Var | Effect |
+|---|---|
+| `APPSTORE_KEY_ID` | Use this key name instead of the config's `default_key` |
+| `APPSTORE_SECRETS_DIR` | Override where to look for `appstore-config.yaml` + `.p8` |
+| `APPSTORE_METADATA_DIR` | Override where to find/write YAML metadata |
+
+---
+
+# Workflow
+
+Source: https://zmij.github.io/appstore-cli/workflow
+
+# Workflow
+
+The CLI exists to make App Store Connect editable from text files instead of a website. The canonical loop is **export → edit → sync**, with **pull** + **diff** filling in two-way reconciliation.
+
+## The core loop (IAPs + subscriptions)
+
+```bash
+# One-time: seed the YAML from live ASC.
+appstore iap export --output l10n/metadata/apple/iap.yaml
+git add l10n/metadata/apple/iap.yaml && git commit -m "seed: iap metadata"
+
+# Day-to-day: edit YAML, push.
+$EDITOR l10n/metadata/apple/iap.yaml
+appstore iap sync --dry-run                # safe preview
+appstore iap sync                          # push for real
+git commit -am "Update IAP copy for v1.2"
+
+# When someone edits ASC directly (Apple staff, product manager, etc.):
+appstore iap diff                          # show what drifted
+appstore iap pull                          # absorb live changes without overwriting local
+git diff l10n/metadata/apple/iap.yaml      # review what came in
+```
+
+## The same loop for listings
+
+```bash
+# Seed
+appstore listings update --all --dry-run   # shows the snapshot you'd push
+# (no dedicated `listings export` yet — export is via the IAP / show paths)
+
+# Edit
+$EDITOR l10n/metadata/apple/listings/en-GB.yaml
+
+# Preview + push
+appstore listings update --lang en-GB --dry-run
+appstore listings update --all
+```
+
+`appstore listings diff` shows YAML-vs-live drift the same way `iap diff` does.
+
+## Creating new products
+
+`iap sync` only patches products that already exist on ASC; it skips missing ones. To create new IAPs/subscriptions from YAML:
+
+```bash
+# Add a new product entry to iap.yaml
+$EDITOR l10n/metadata/apple/iap.yaml
+
+# Pre-flight: does Apple think this productId is taken?
+appstore iap create --product-id premium_lifetime --dry-run
+
+# Actually create. Hard-fails if the productId already exists (use sync instead).
+appstore iap create --product-id premium_lifetime
+```
+
+The create flow:
+1. Creates the IAP / sub / group on ASC.
+2. Immediately pushes localisations, prices, availability, intro offers, and the review screenshot — same code as `iap sync`.
+3. Returns the new ASC entity ID for follow-up scripting.
+
+To create everything in one go (multiple new productIds in YAML), drop `--product-id`:
+
+```bash
+appstore iap create --dry-run
+appstore iap create
+```
+
+## Pricing migration
+
+Patch operations write `preserveCurrentPrice = true` — the new price applies to **new** subscribers only. Existing cohorts stay on their old price.
+
+To migrate existing subscribers:
+
+```bash
+# Anchor territory (USA, matches your YAML's base_territory).
+appstore iap migrate-prices --product-id premium_monthly
+# Migration plan:
+#   subscription:   premium_monthly (ASC id 6756577170)
+#   anchor:         USA
+#   target price:   4.99 USA
+#   semantics:      re-broadcasts current price with preserveCurrentPrice=false
+# [dry-run] no API call fired. Pass --confirm to actually migrate.
+
+appstore iap migrate-prices --product-id premium_monthly --confirm
+```
+
+Apple's customer notification + opt-in flow kicks in automatically for increases; decreases auto-apply at next billing.
+
+See [quirks.md](quirks.md) for why non-anchor territories aren't supported in one call.
+
+## Two-way reconciliation
+
+Two scenarios where `pull` + `diff` matter:
+
+**1. Someone edited ASC directly.**
+
+```bash
+appstore iap diff
+# mismatch    purchases/diagonal_12clue/localisations/en/description
+#               yaml: 12 clue diagonal puzzles
+#               live: Diagonal puzzles with 12 starting clues
+
+appstore iap pull --dry-run                # shows what would be added
+appstore iap pull                          # absorbs additions (never overwrites)
+git diff l10n/metadata/apple/iap.yaml      # commit if it looks right
+```
+
+`pull` is **additive only**. If a product exists in both YAML and live but their fields differ, `pull` leaves the YAML alone — you have to decide which side wins:
+
+- `iap sync` → YAML wins (overwrites live)
+- Hand-edit YAML to match live, then `pull` is a no-op
+
+**2. You set up a new project.**
+
+```bash
+appstore iap export --output l10n/metadata/apple/iap.yaml
+# OVERWRITES the file. Use this only when seeding.
+```
+
+After the initial export, switch to `pull` for incremental absorbs. Export is the nuclear option that round-trips the entire live state and discards any local edits.
+
+## CI integration
+
+Both `iap sync` and `listings update` exit non-zero on failure, so they integrate cleanly into CI:
+
+```yaml
+# .github/workflows/release.yml
+- name: Push metadata
+  env:
+    APPSTORE_KEY_ID: build_upload
+    # Auth + .p8 staged in .secret-stuff/ by an earlier secret-decrypt step
+  run: |
+    appstore listings update --all
+    appstore iap sync
+```
+
+For preview-mode CI (PR builds that shouldn't touch live state):
+
+```yaml
+- name: Validate metadata
+  run: |
+    appstore listings update --all --dry-run
+    appstore iap sync --dry-run
+    appstore iap diff           # exits 0 even with divergence; pipe to fail-on-output
+```
+
+## Screenshots
+
+Different rhythm — screenshots are bigger binary uploads, so the CLI's batch operations matter:
+
+```bash
+# Upload one locale's set, replacing whatever's there.
+appstore screenshots upload --source ./shots/en-GB --lang en-GB --mode replace
+
+# Upload every locale's set in one pass.
+appstore screenshots upload --source ./shots --all --mode replace
+```
+
+`./shots/<lang>/` should contain files named per Apple's device-class conventions — a dedicated screenshots-schema doc is TODO; for now see the source in `src/commands/screenshots.ts` for the device-class naming pattern.
+
+## App Previews (video)
+
+Similar to screenshots but for the per-device-class App Preview reels:
+
+```bash
+appstore previews list --lang en-GB
+appstore previews upload --source ./reels/en-GB --lang en-GB
+```
+
+Apple rejects previews that don't match the strict spec (1080×1920, 30fps, AAC silent audio for portrait iPhone tiers, etc.). The CLI doesn't transcode — supply the right files.
+
+---
+
+# IAP schema
+
+Source: https://zmij.github.io/appstore-cli/iap-schema
+
+# `iap.yaml` schema
+
+The full YAML format for `iap.yaml`. Covers purchases (managed + non-renewing), subscriptions, subscription groups, intro offers, and review screenshots.
+
+## Top-level shape
+
+```yaml
+subscription_groups:        # optional — only needed if creating new groups via `iap create`
+  <ref_name>:
+    reference_name: <string>
+    localisations:
+      <lang>:
+        name: <string>
+        custom_app_name: <string>   # optional
+
+purchases:                  # IAPs: managed (lifetime) + non-renewing subs
+  <product_id>:
+    reference_name: <string>
+    type: NON_CONSUMABLE | CONSUMABLE | NON_RENEWING_SUBSCRIPTION
+    family_sharable: <bool>
+    price:
+      base_territory: <ISO3>           # e.g. USA
+      base_price: "4.99"               # customer-facing in base_territory's currency
+    availability:
+      available_in_new_territories: <bool>
+      territories: [ISO3, ...] | "all"
+    review_screenshot: <path>          # local PNG / JPEG, required for ASC submission
+    localisations:
+      <lang>:
+        display_name: <string>
+        description: <string>
+
+subscriptions:              # auto-renewing
+  <product_id>:
+    reference_name: <string>
+    group: <ref_name>                  # which subscription_groups entry
+    subscription_period: ONE_WEEK | ONE_MONTH | TWO_MONTHS | THREE_MONTHS | SIX_MONTHS | ONE_YEAR
+    family_sharable: <bool>
+    group_level: <number>              # 1 = top tier; lower number = higher rank
+    price:
+      base_territory: <ISO3>
+      base_price: "9.99"
+    availability:
+      available_in_new_territories: <bool>
+      territories: [ISO3, ...] | "all"
+    intro_offers:
+      - mode: FREE_TRIAL | PAY_AS_YOU_GO | PAY_UP_FRONT
+        duration: THREE_DAYS | ONE_WEEK | TWO_WEEKS | ONE_MONTH | TWO_MONTHS | THREE_MONTHS | SIX_MONTHS | ONE_YEAR
+        periods: <number>              # how many duration cycles
+        price: "1.99"                  # only for PAY_AS_YOU_GO / PAY_UP_FRONT
+        territory: <ISO3>              # optional — omit for global
+        start_date: <ISO8601>          # optional
+        end_date: <ISO8601>            # optional
+    review_screenshot: <path>
+    localisations:
+      <lang>:
+        display_name: <string>
+        description: <string>
+```
+
+## Field reference
+
+### `purchases.*` and `subscriptions.*`
+
+| Field | Type | Required on | Notes |
+|---|---|---|---|
+| `reference_name` | string | always | Apple's internal label; not user-visible |
+| `type` | enum | `iap create` | `NON_CONSUMABLE`/`CONSUMABLE`/`NON_RENEWING_SUBSCRIPTION`. **Immutable** once created |
+| `family_sharable` | bool | `iap create` | Family Sharing eligibility. **Immutable** |
+| `price` | object | always | See below |
+| `availability` | object | always | See below |
+| `review_screenshot` | path | submission | Local file path (PNG / JPEG). Required by App Review |
+| `localisations` | map | always | Per-locale `display_name` + `description` |
+
+### `price`
+
+```yaml
+price:
+  base_territory: USA   # ISO 3166-1 alpha-3
+  base_price: "4.99"    # customer-facing price in base_territory's currency
+```
+
+Apple uses a **tier price-point system**, not free-form prices. You pick a tier (e.g. `$4.99 USD`) and Apple auto-derives the equivalent tier in every other territory's currency. The CLI looks up the matching tier ID from your stated price — if Apple doesn't have a tier at exactly `$4.99`, the CLI errors with the nearest tiers listed.
+
+Only the **anchor** (`base_territory`) is set explicitly. Other territories inherit from Apple's tier table.
+
+### `availability`
+
+```yaml
+availability:
+  available_in_new_territories: true   # if Apple opens a new region, ship there by default
+  territories: ["USA", "GBR", "DEU", ...]
+  # OR:
+  territories: "all"                   # shorthand for every territory Apple supports
+```
+
+### `localisations`
+
+```yaml
+localisations:
+  en:
+    display_name: "Premium - Lifetime"
+    description: "All features unlocked, forever."
+  de:
+    display_name: "Premium - Lebenslang"
+    description: "Alle Funktionen freigeschaltet, dauerhaft."
+```
+
+The lang key uses the short form (e.g. `en`, `de`, `fr`, `pt-BR`). The CLI maps to ASC locales (`en-GB`, `de-DE`, `pt-BR`).
+
+## `subscriptions.*` extras
+
+### `intro_offers`
+
+Smart-diffed by `(mode, duration, periods, territory)` tuple. Adding/removing offers in YAML adds/removes them on ASC; changing the price inside a matched offer overwrites that one.
+
+```yaml
+intro_offers:
+  - mode: FREE_TRIAL
+    duration: ONE_WEEK
+    periods: 1
+    # FREE_TRIAL doesn't need price
+  - mode: PAY_AS_YOU_GO
+    duration: ONE_MONTH
+    periods: 3
+    price: "1.99"
+    territory: USA            # USA-only intro at $1.99/mo for 3 months
+  - mode: PAY_UP_FRONT
+    duration: ONE_YEAR
+    periods: 1
+    price: "29.99"
+    start_date: "2026-01-01T00:00:00Z"
+    end_date:   "2026-12-31T23:59:59Z"
+```
+
+### `group` + `group_level`
+
+Subscriptions belong to a group. Within a group, users can only have one active sub at a time, so groups model tier ladders:
+
+```yaml
+subscription_groups:
+  premium_tiers:
+    reference_name: "Premium tiers"
+    localisations:
+      en: { name: "Premium" }
+
+subscriptions:
+  premium_monthly:
+    group: premium_tiers
+    group_level: 2            # below the annual
+  premium_annual:
+    group: premium_tiers
+    group_level: 1            # top of the ladder
+```
+
+Lower `group_level` = higher tier (counter-intuitive). Upgrades go from higher number → lower number.
+
+## `subscription_groups`
+
+Required when `iap create` is creating a brand-new group. On export, the CLI fills in `reference_name` from the live group; you can leave it omitted on existing products (the CLI looks them up by ASC ID).
+
+```yaml
+subscription_groups:
+  premium_tiers:
+    reference_name: "Premium tiers"        # Apple's internal name
+    localisations:
+      en:
+        name: "Premium"                    # user-visible group name
+        custom_app_name: "MyApp Premium"   # optional override
+      de:
+        name: "Premium"
+```
+
+## Locale codes
+
+The CLI uses **short codes** in YAML (more pleasant to type and grep). Internally it maps to ASC locales:
+
+| YAML key | ASC locale |
+|---|---|
+| `en` | `en-GB` |
+| `en-US` | `en-US` |
+| `de` | `de-DE` |
+| `fr` | `fr-FR` |
+| `es` | `es-ES` |
+| `es-MX` | `es-MX` |
+| `pt` | `pt-BR` |
+| `pt-PT` | `pt-PT` |
+| `zh` | `zh-Hans` |
+| `ja` | `ja` |
+| `ko` | `ko` |
+| `ar` | `ar-SA` |
+| `ru` | `ru` |
+| `hi` | `hi` |
+| `id` | `id` |
+| `fi` | `fi` |
+| `he` | `he` |
+
+## Validation
+
+Pre-flight your edits before pushing:
+
+```bash
+appstore iap diff               # shows field-level divergence vs live
+appstore iap sync --dry-run     # shows what `sync` would patch (no calls)
+```
+
+If you've added a new product and want to confirm the create path:
+
+```bash
+appstore iap create --product-id new_thing --dry-run
+```
+
+## Round-trip fidelity
+
+`iap export` → `iap sync` is a no-op (zero divergence in `iap diff`). The exporter writes every field the syncer can push back, including ASC-side defaults like `family_sharable: false`. If you find a roundtrip that drifts, it's a bug.
+
+---
+
+# Listings schema
+
+Source: https://zmij.github.io/appstore-cli/listings-schema
+
+# Listings YAML schema
+
+Per-locale YAML lives at `<metadata_dir>/listings/<lang>.yaml` (default `l10n/metadata/apple/listings/<lang>.yaml`).
+
+One file per locale. The lang key is the short form — see the [locale mapping](#locale-mapping) below for how it maps to ASC's longer codes.
+
+## Shape
+
+```yaml
+# l10n/metadata/apple/listings/en.yaml
+
+whats_new: |
+  New in this version:
+  • Reworked solver
+  • Faster startup
+  • Bug fixes
+
+app_info:
+  title: "Lazy Sudoku"
+  subtitle: "Solve smarter, not harder"
+  promotional_text: "Now with diagonal-X support."
+  description: |
+    The most relaxing sudoku app on the store.
+
+    • Classic + diagonal + jigsaw variants
+    • Apple Pencil-friendly note-taking
+    • Camera scanner for paper puzzles
+  keywords: "sudoku,puzzle,brain,logic,number,maths"
+```
+
+## Field reference
+
+| YAML field | ASC field | Limit | Notes |
+|---|---|---|---|
+| `whats_new` | `whatsNew` | 4000 chars | "What's New In This Version" on the release. Reset per version |
+| `app_info.title` | `name` | 30 chars | App name in the store. Apple is strict — keep it short |
+| `app_info.subtitle` | `subtitle` | 30 chars | One-liner under the title |
+| `app_info.promotional_text` | `promotionalText` | 170 chars | Editable without a new release. Use for time-bound copy |
+| `app_info.description` | `description` | 4000 chars | Full marketing description. Markdown-ish (line breaks preserved) |
+| `app_info.keywords` | `keywords` | 100 chars | Comma-separated. **No spaces around commas** — wastes character budget |
+
+Apple silently truncates over-limit fields. The CLI doesn't validate length client-side; use `appstore listings show --lang X` after a push to confirm.
+
+## Multi-line values
+
+YAML's `|` literal-block syntax preserves line breaks. Use it for `whats_new` and `description`:
+
+```yaml
+whats_new: |
+  Line one.
+
+  Line two with a blank line above.
+description: |
+  Paragraph one.
+
+  Paragraph two. **Bold not supported** — Apple strips formatting.
+```
+
+## Keywords
+
+Apple's keyword budget is **100 characters total, comma-separated, no spaces**. Pack carefully:
+
+```yaml
+# Good — 67 chars
+keywords: "sudoku,puzzle,brain,logic,number,maths,daily,kids,relaxing"
+
+# Bad — wastes 8 chars on spaces
+keywords: "sudoku, puzzle, brain, logic, number, maths"
+```
+
+You don't need to repeat words from the title — Apple counts them implicitly. Keyword stuffing risks rejection.
+
+## Per-locale strategy
+
+Each locale's file is independent. Common pattern:
+
+- `en.yaml` is your "authoritative" copy.
+- Other locales are translations, but `keywords` should be **locale-specific** — Japanese users search for `数独` not `sudoku`.
+- `whats_new` resets every release; copy/translate per release.
+- `app_info.*` survives across releases until you change it.
+
+## Locale mapping
+
+YAML uses short codes; the CLI maps to ASC locales:
+
+| `<lang>.yaml` | ASC locale |
+|---|---|
+| `en` | `en-GB` |
+| `en-US` | `en-US` |
+| `de` | `de-DE` |
+| `fr` | `fr-FR` |
+| `es` | `es-ES` |
+| `es-MX` | `es-MX` |
+| `pt` | `pt-BR` |
+| `pt-PT` | `pt-PT` |
+| `zh` | `zh-Hans` |
+| `ja` | `ja` |
+| `ko` | `ko` |
+| `ar` | `ar-SA` |
+| `ru` | `ru` |
+| `hi` | `hi` |
+| `id` | `id` |
+| `fi` | `fi` |
+| `he` | `he` |
+
+Add a locale by creating `<lang>.yaml` and running `appstore listings update --lang <lang>`. The CLI creates the localisation on ASC if it doesn't exist.
+
+## Push paths
+
+```bash
+# Update everything from every per-locale YAML
+appstore listings update --all
+
+# One locale only
+appstore listings update --lang ja
+
+# One field across all locales (e.g. only `whats_new` for a hotfix)
+appstore listings update --all --field whats_new
+
+# Dry-run first — always a good idea
+appstore listings update --all --dry-run
+```
+
+## Diff
+
+```bash
+appstore listings diff [--lang ja]
+```
+
+Shows what's different between YAML and live, per field. Useful before a `--all` push to spot unintended changes.
+
+## Mac vs iOS
+
+If your app ships both iOS and Mac, ASC tracks them as separate versions with their own per-locale listings. `listings update` targets the editable version of one platform at a time:
+
+```bash
+appstore listings update --all --version-id <ios-version-id>
+appstore listings update --all --version-id <macos-version-id>
+```
+
+Same YAML, two pushes. (TODO: a `--platform ios,macos` mode that fans out automatically.)
+
+---
+
+# Apple quirks
+
+Source: https://zmij.github.io/appstore-cli/quirks
+
+# Apple quirks
+
+Non-obvious behaviour from the App Store Connect API that the CLI works around. Each entry includes what the API does, what we do about it, and what to remember when you go beyond the CLI.
+
+## 1. Edit sessions are listings-only
+
+Apple's API has a **session model** for app metadata: you open a draft "edit", make changes, then commit. The CLI threads this transparently for listings + screenshots.
+
+**IAPs and subscriptions don't need an edit session.** Changes apply immediately on `iap sync`. Don't try to wrap them in a session — you'll get cryptic 4xx errors.
+
+This split mirrors how the ASC website behaves: listing edits queue up in a "version under preparation" you submit later; IAP/sub edits go live on save.
+
+## 2. `preserveCurrentPrice` is the migration discriminator
+
+When you create a `subscriptionPrices` row:
+
+| `preserveCurrentPrice` | Who sees the new price |
+|---|---|
+| `true` (CLI default on `iap sync`) | New subscribers only. Existing cohorts stay on their old price |
+| `false` (`iap migrate-prices --confirm` writes this) | Everyone — existing subscribers get notified + migrated |
+
+The flag is per-row, so a single subscription can have multiple `subscriptionPrices` schedules, each with its own `preserveCurrentPrice`. Apple uses the most recent one to decide what a new subscriber sees; existing subscribers stick to whatever schedule they signed up under, unless a `preserveCurrentPrice = false` row supersedes it.
+
+**`iap sync` deliberately writes `true`** — never accidentally migrate live subscribers. `iap migrate-prices` is the explicit opt-in for the `false` path.
+
+## 3. Subscription price points are per-territory
+
+Apple has a tier table (`subscriptionPricePoints`) and you set prices by referencing a tier ID — you can't pass a free-form `$4.99`. Each call to `findSubscriptionPricePoint(subId, territory, "4.99")` returns the territory's tier ID matching that price.
+
+**The CLI does this lookup for you.** If your YAML says `base_price: "4.99"` in `base_territory: USA`, the CLI:
+
+1. Asks Apple for USA's tier table.
+2. Finds the row with `customerPrice === "4.99"`.
+3. Uses that row's ID.
+
+If no tier matches exactly, the CLI errors and lists the nearest tiers — Apple's table is discrete, so `$4.99` exists but `$4.97` doesn't.
+
+## 4. The anchor migration only affects the anchor's territory
+
+Because each `subscriptionPrices` row is per-territory, **migrating the anchor doesn't auto-migrate other territories**. Apple's auto-equalised tier system handles the derived prices for *new* buyers in non-anchor territories, but existing buyers stay on whatever schedule they were signed up under in their territory.
+
+The CLI's `iap migrate-prices` is **anchor-only by default**. Non-anchor territories are explicitly refused (clear error + hint to drop `--territory`) rather than silently using the wrong price-point ID — the point ID in the price summary is the anchor's, and reusing it for a different territory would migrate the wrong cohort.
+
+Per-territory migration would need an extra lookup per scope; deferred until needed.
+
+## 5. Apple picks the consent flow from the price delta
+
+When `preserveCurrentPrice = false` triggers migration, **Apple decides the customer-facing flow** based on whether the new price is higher or lower than the old:
+
+- **Price decrease** → auto-applies at the subscriber's next billing date. No customer prompt.
+- **Price increase** → Apple's standard customer notification + opt-in flow. Subscribers see a Settings prompt asking them to accept; declines cancel the subscription at the next renewal.
+
+You don't pass a "consent type" — Apple chooses. There's a separate `subscriptionPriceTimingType` enum for fine-grained control (e.g. `IMMEDIATELY` vs `WAITS_BILLING_CYCLE`), but the defaults work for the vast majority of cases.
+
+## 6. IAP localisations require `name`
+
+`InAppPurchaseLocalizationCreateRequest` requires `name` — passing only `description` errors out. The CLI ensures `display_name` is set on every locale; if you forget it in YAML, sync fails for that locale specifically (other locales still push).
+
+This is different from listing localisations, where most fields are optional. Don't carry the same mental model across.
+
+## 7. Subscription-group reference name is immutable
+
+You can set `subscription_groups.<key>.reference_name` on creation, but it can't be changed afterwards. The CLI looks up existing groups by ASC ID, not by name, so you can rename in YAML without breaking the link — but the ASC UI keeps showing the original name.
+
+If you really need to rename, delete the group on ASC (only possible if it has no active subscribers, which is almost never the case) and create a new one.
+
+## 8. Review screenshots are required for submission
+
+Apple Review needs a screenshot showing the IAP / subscription's purchase flow in your app. The CLI uploads it as part of `iap sync` when `review_screenshot: <path>` is set, but **doesn't validate** that the file is reasonable — it just uploads whatever you point at.
+
+If you submit without a review screenshot, Apple rejects the IAP. The CLI surfaces upload errors but can't tell you whether the screenshot itself is good.
+
+## 9. App Preview videos have a strict spec
+
+App Previews (per-locale promo reels) must match Apple's spec exactly:
+
+- **Portrait iPhone tiers**: 1080×1920, 30fps, AAC audio (silent is fine, but the track must exist).
+- **Landscape iPad tiers**: their respective resolutions.
+- File must be H.264 in MOV/MP4 container.
+
+The CLI doesn't transcode — supply the right files. If Apple rejects the upload, the error usually says which dimension is wrong. Common gotchas:
+
+- Native iOS screen recordings are 1284×2778 / 60fps / no audio — all wrong.
+- ffmpeg transcode incantation:
+  ```bash
+  ffmpeg -i in.mov -vf "scale=1080:1920,fps=30" \
+         -c:v libx264 -pix_fmt yuv420p -profile:v high -level 4.0 \
+         -c:a aac -ar 48000 -b:a 64k -af "anullsrc" -shortest \
+         -movflags +faststart out.mov
+  ```
+
+## 10. Worktree vs project root
+
+The CLI distinguishes two roots:
+
+- **Project root** — the main repo. Where secrets live (`.secret-stuff/appstore-config.yaml`). Shared across worktrees.
+- **Worktree root** — the current branch's working directory. Where metadata lives (`l10n/metadata/apple/iap.yaml`). Per-branch.
+
+This matters when you're editing IAP metadata on a feature branch in a worktree: the change stays in the worktree, but the secrets you use to push it come from the main repo. `git rev-parse --git-common-dir` discovers the main repo even from a worktree.
+
+If you're not using worktrees, both roots are the same path — nothing to think about.
+
+## 11. Rate limits are real but generous
+
+App Store Connect rate-limits aggressively for write operations, less so for reads. The CLI doesn't back off — if you hit a rate limit, the call fails with a clear error and you re-run. In practice:
+
+- `iap sync` for ~10 products including ~170 territories each: ~1 minute, no rate hits.
+- `iap export` (full pull): ~90 seconds for the same setup.
+- `listings update --all` for 14 locales: ~20 seconds.
+
+Bulk operations that fan out to many calls (e.g. screenshot uploads) are the most likely to hit limits. Spread big uploads across multiple runs if you see 429s.
+
+## 12. `lazy_sudoku_*` legacy SKU prefix
+
+(Lazy-Sudoku-specific, but illustrative.) When the project was set up, IAPs were named `lazy_sudoku_premium_lifetime` etc. Later renames dropped the prefix (`premium_lifetime`), but the old SKUs can't be renamed — Apple treats productId as immutable. If you're forking this CLI for your own project, **choose your SKU names carefully on day one**; renames mean creating new products + deprecating the old ones, not editing in place.
+
+---
